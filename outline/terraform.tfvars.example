@@ -8,3 +8,7 @@ project_id = "your-gcp-project-id"
 # service_account_email = "PROJECT_NUMBER-compute@developer.gserviceaccount.com"
 
 regions = ["us-west1", "europe-west1", "asia-southeast1"]
+
+# Instances are named <prefix>-<region>, e.g. outline-us-west1.
+# Lowercase letters, digits and hyphens only.
+instance_name_prefix = "outline"

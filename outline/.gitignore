@@ -5,3 +5,4 @@
 # Local variable values (may contain project IDs)
 terraform.tfvars
 *.auto.tfvars
+.terraform.lock.hcl
