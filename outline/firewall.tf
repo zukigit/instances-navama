@@ -5,7 +5,7 @@ resource "google_compute_firewall" "outline" {
   priority  = 1000
 
   source_ranges = var.firewall_source_ranges
-  target_tags   = var.tags
+  target_tags   = [var.tag_name]
 
   allow {
     protocol = "tcp"

@@ -13,7 +13,7 @@ resource "google_compute_instance" "outline" {
   machine_type = var.machine_type
   zone         = sort(data.google_compute_zones.available[each.key].names)[0]
 
-  tags   = var.tags
+  tags   = [var.tag_name]
   labels = var.labels
 
   boot_disk {

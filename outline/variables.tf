@@ -69,10 +69,15 @@ variable "scopes" {
   ]
 }
 
-variable "tags" {
-  description = "Network tags."
-  type        = list(string)
-  default     = ["outline"]
+variable "tag_name" {
+  description = "Network tag put on the VMs; the firewall rule targets instances with this tag."
+  type        = string
+  default     = "outline-nw"
+
+  validation {
+    condition     = can(regex("^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$", var.tag_name))
+    error_message = "tag_name must be 1-63 chars of lowercase letters, digits or hyphens, start with a letter and not end with a hyphen (GCP does not allow underscores)."
+  }
 }
 
 variable "labels" {

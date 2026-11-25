@@ -1,6 +1,6 @@
 # Outline instances on GCP
 
-Terraform that creates one Outline VM per region, plus a firewall rule that opens the Outline ports on every VM tagged `outline`.
+Terraform that creates one Outline VM per region, plus a firewall rule that opens the Outline ports on every VM with the network tag `tag_name` (default `outline-nw`).
 
 ## What gets created
 
@@ -8,9 +8,9 @@ Terraform that creates one Outline VM per region, plus a firewall rule that open
   - `e2-micro`, Debian 13 (trixie), 10 GB `pd-balanced` boot disk
   - on the `default` network, with a temporary (ephemeral) external IP on the Standard tier
   - Shielded VM with vTPM and integrity monitoring on, secure boot off
-  - tagged `outline`
+  - tagged with `tag_name` (default `outline-nw`)
   - placed in the first available zone of its region
-- **One firewall rule**, `allow-outline`: incoming traffic from `0.0.0.0/0` to instances tagged `outline`, priority 1000.
+- **One firewall rule**, `allow-outline`: incoming traffic from `0.0.0.0/0` to instances tagged with `tag_name`, priority 1000.
   - TCP: `8443`, `9443`
   - UDP: `9443`
 
@@ -82,7 +82,7 @@ terraform destroy
 | `subnetwork` | `default` | Subnet name, looked up in each region |
 | `service_account_email` | `null` (project's default compute SA) | Service account attached to the VMs |
 | `scopes` | gcloud default scopes | OAuth scopes for the service account |
-| `tags` | `["outline"]` | Network tags; the firewall rule targets these too |
+| `tag_name` | `outline-nw` | Network tag on the VMs; the firewall rule targets this tag |
 | `labels` | `{ managed-by = "terraform" }` | Instance labels |
 | `firewall_source_ranges` | `["0.0.0.0/0"]` | Source addresses allowed through the firewall |
 | `outline_tcp_ports` | `["8443", "9443"]` | TCP ports to open |
