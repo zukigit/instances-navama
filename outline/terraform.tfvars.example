@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars (ignored by git) and fill in your values.
+# Any variable can also be passed on the command line:
+#   terraform apply -var='regions=["us-west1","europe-west1"]'
+
+project_id = "your-gcp-project-id"
+
+# Optional: defaults to the project's default Compute Engine service account.
+# service_account_email = "PROJECT_NUMBER-compute@developer.gserviceaccount.com"
+
+regions = ["us-west1", "europe-west1", "asia-southeast1"]

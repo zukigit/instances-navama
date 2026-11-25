@@ -1,0 +1,7 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# Local variable values (may contain project IDs)
+terraform.tfvars
+*.auto.tfvars
