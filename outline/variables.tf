@@ -94,6 +94,17 @@ variable "network" {
   default     = "default"
 }
 
+variable "firewall_name" {
+  description = "Name of the Outline firewall rule."
+  type        = string
+  default     = "allow-outline"
+
+  validation {
+    condition     = can(regex("^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$", var.firewall_name))
+    error_message = "firewall_name must be 1-63 chars of lowercase letters, digits or hyphens, start with a letter and not end with a hyphen."
+  }
+}
+
 variable "firewall_source_ranges" {
   description = "Source IPv4 ranges allowed to reach the Outline ports."
   type        = list(string)

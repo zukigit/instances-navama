@@ -12,3 +12,7 @@ regions = ["us-west1", "europe-west1", "asia-southeast1"]
 # Instances are named <prefix>-<region>, e.g. outline-us-west1.
 # Lowercase letters, digits and hyphens only.
 instance_name_prefix = "outline"
+
+# Name of the firewall rule that opens the Outline ports.
+# Lowercase letters, digits and hyphens only.
+firewall_name = "allow-outline"

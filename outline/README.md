@@ -10,7 +10,7 @@ Terraform that creates one Outline VM per region, plus a firewall rule that open
   - Shielded VM with vTPM and integrity monitoring on, secure boot off
   - tagged with `tag_name` (default `outline-nw`)
   - placed in the first available zone of its region
-- **One firewall rule**, `allow-outline`: incoming traffic from `0.0.0.0/0` to instances tagged with `tag_name`, priority 1000.
+- **One firewall rule**, named `firewall_name` (default `allow-outline`): incoming traffic from `0.0.0.0/0` to instances tagged with `tag_name`, priority 1000.
   - TCP: `8443`, `9443`
   - UDP: `9443`
 
@@ -36,7 +36,7 @@ cp terraform.tfvars.example terraform.tfvars
 ```bash
 terraform init
 terraform plan
-terraform apply
+terraform apply -auto-approve
 ```
 
 With only `project_id` set, this creates a single instance in `us-west1`.
@@ -84,6 +84,7 @@ terraform destroy
 | `scopes` | gcloud default scopes | OAuth scopes for the service account |
 | `tag_name` | `outline-nw` | Network tag on the VMs; the firewall rule targets this tag |
 | `labels` | `{ managed-by = "terraform" }` | Instance labels |
+| `firewall_name` | `allow-outline` | Name of the firewall rule |
 | `firewall_source_ranges` | `["0.0.0.0/0"]` | Source addresses allowed through the firewall |
 | `outline_tcp_ports` | `["8443", "9443"]` | TCP ports to open |
 | `outline_udp_ports` | `["9443"]` | UDP ports to open |
@@ -95,8 +96,8 @@ You can override any of these with `-var` or in `terraform.tfvars`. Never commit
 - **Cost:** the free e2-micro only applies in `us-west1`, `us-central1` and `us-east1`. Instances in any other region are billed.
 - **External IPs are temporary.** An instance's IP can change when it is stopped and started, so any Outline access keys that use that IP stop working. Reserve a static address if you need it to stay the same.
 - **State:** Terraform keeps its state in a local `terraform.tfstate` file, which is not committed to git. Keep that file somewhere safe; without it, Terraform can no longer manage the instances it created.
-- **Existing resources:** if a VM named `outline-<region>` or a firewall rule named `allow-outline` already exists, `apply` fails. Import it into Terraform first:
+- **Existing resources:** if a VM named `outline-<region>` or the firewall rule (`firewall_name`, default `allow-outline`) already exists, `apply` fails. Import it into Terraform first:
   ```bash
   terraform import 'google_compute_instance.outline["us-west1"]' projects/<project>/zones/<zone>/instances/outline-us-west1
-  terraform import google_compute_firewall.outline allow-outline
+  terraform import google_compute_firewall.outline <firewall_name>
   ```

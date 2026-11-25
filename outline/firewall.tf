@@ -1,5 +1,5 @@
 resource "google_compute_firewall" "outline" {
-  name      = "allow-outline"
+  name      = var.firewall_name
   network   = var.network
   direction = "INGRESS"
   priority  = 1000
