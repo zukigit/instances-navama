@@ -116,7 +116,7 @@ terraform apply 2>&1 | tee apply.log
 
 This needs an SSH key pair, `~/.ssh/id_ed25519` by default (`ssh-keygen -t ed25519` if you don't have one). If the install fails, the VM is kept and the next `apply` runs the script again. Editing `postscript.sh` also makes the next `apply` re-run it on every instance. Set `run_postscript = false` to skip the install.
 
-Port 22 is only open while the install runs. Before installing, Terraform turns the `<firewall_name>-ssh` rule on; once every instance has finished, it turns the rule off again with `gcloud`, so `gcloud` must be installed and signed in (`gcloud auth login`). If an install fails, the rule stays on so you can SSH in and debug; the next successful `apply` turns it off. Set `close_ssh_after_install = false` to keep port 22 open. To open it by hand later:
+Port 22 is only open while the install runs. Before installing, Terraform turns the `<firewall_name>-ssh` rule on; once every instance has finished, it turns the rule off again with `gcloud`, so `gcloud` must be installed and signed in (`gcloud auth login`). If an install fails, the rule stays on so you can SSH in and debug; the next successful `apply` turns it off. Set `close_ssh_after_install = false` to keep port 22 open. This only closes port 22 if no other rule opens it: new GCP projects come with `default-allow-ssh` (TCP 22 from anywhere, all VMs). Disable it with `gcloud compute firewall-rules update default-allow-ssh --disabled`, but check that no other VM in the project needs it first. To open it by hand later:
 
 ```bash
 gcloud compute firewall-rules update allow-outline-ssh --no-disabled   # open

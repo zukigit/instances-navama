@@ -1,31 +1,20 @@
-# Installs Docker + Outline on each instance over SSH after it is created.
-# Every line the script prints is shown in the `terraform apply` output,
-# prefixed with the instance it came from.
+# Runs scripts on each instance over SSH. Every line they print is shown in the
+# `terraform apply` output, prefixed with the instance it came from.
 #
-# This lives in terraform_data (not inside the instance) so a failed install
-# only marks this step for a re-run; the VM itself is not destroyed.
+# These live in terraform_data (not inside the instance) so a failed run only
+# marks that step for a re-run; the VM itself is not destroyed.
+#
+# Port 22: every step that connects over SSH first turns the SSH firewall rule
+# on itself (so it can never be skipped), and ssh_close turns it off once all
+# SSH steps in the apply have finished.
 locals {
   manage_ssh_rule = var.close_ssh_after_install
   ssh_rule_cmd    = "gcloud compute firewall-rules update ${google_compute_firewall.outline_ssh.name} --project=${var.project_id} --quiet"
+  # Run before connecting; a no-op when close_ssh_after_install = false.
+  ssh_open_cmd = local.manage_ssh_rule ? "${local.ssh_rule_cmd} --no-disabled" : "true"
 }
 
-# Step 1: make sure the SSH rule is on before anything connects over SSH.
-# Runs again whenever the instances, the install script or run_hours change.
-resource "terraform_data" "ssh_open" {
-  count = local.manage_ssh_rule ? 1 : 0
-
-  triggers_replace = [
-    sort([for vm in google_compute_instance.outline : vm.id]),
-    filesha256("${path.module}/postscript.sh"),
-    var.run_hours,
-  ]
-
-  provisioner "local-exec" {
-    command = "${local.ssh_rule_cmd} --no-disabled"
-  }
-}
-
-# Step 2: install Docker + Outline on each instance.
+# Step 1: install Docker + Outline on each instance.
 resource "terraform_data" "outline_install" {
   for_each = var.run_postscript ? google_compute_instance.outline : {}
 
@@ -43,7 +32,10 @@ resource "terraform_data" "outline_install" {
     timeout     = "5m"
   }
 
-  depends_on = [terraform_data.ssh_open]
+  # Open port 22 before connecting.
+  provisioner "local-exec" {
+    command = local.ssh_open_cmd
+  }
 
   provisioner "file" {
     source      = "${path.module}/postscript.sh"
@@ -57,7 +49,7 @@ resource "terraform_data" "outline_install" {
   }
 }
 
-# Step 2b: apply run_hours to the running VM right away (without a reboot).
+# Step 2: apply run_hours to the running VM right away (without a reboot).
 # The boot script only runs at boot, so when run_hours or run_hours_mode changes
 # this logs in and updates the scheduled shutdown:
 #   reset  -> shut down run_hours from now
@@ -83,7 +75,12 @@ resource "terraform_data" "shutdown_timer" {
     timeout     = "5m"
   }
 
-  depends_on = [terraform_data.ssh_open, terraform_data.outline_install]
+  depends_on = [terraform_data.outline_install]
+
+  # Open port 22 before connecting.
+  provisioner "local-exec" {
+    command = local.ssh_open_cmd
+  }
 
   provisioner "file" {
     source      = "${path.module}/shutdown-timer.sh"
@@ -100,12 +97,12 @@ resource "terraform_data" "shutdown_timer" {
 }
 
 # Step 3: once all SSH steps have finished, turn the SSH rule off (port 22 closed).
-# Not reached if one fails, so SSH stays open for debugging.
+# Runs whenever any SSH step ran. Not reached if one fails, so SSH stays open
+# for debugging.
 resource "terraform_data" "ssh_close" {
   count = local.manage_ssh_rule ? 1 : 0
 
   triggers_replace = [
-    terraform_data.ssh_open[0].id,
     sort([for run in terraform_data.outline_install : run.id]),
     sort([for run in terraform_data.shutdown_timer : run.id]),
   ]
