@@ -170,3 +170,25 @@ variable "close_ssh_after_install" {
   type        = bool
   default     = true
 }
+
+variable "run_hours" {
+  description = "Stop each VM after it has been running this many hours (timer restarts every time it starts). 0 = no limit."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.run_hours >= 0 && var.run_hours <= 2880 && floor(var.run_hours) == var.run_hours
+    error_message = "run_hours must be a whole number from 0 (no limit) to 2880 (120 days)."
+  }
+}
+
+variable "run_hours_mode" {
+  description = "How a run_hours change applies to a running VM: \"reset\" = shut down run_hours from now; \"append\" = add run_hours to the time currently left."
+  type        = string
+  default     = "reset"
+
+  validation {
+    condition     = contains(["reset", "append"], var.run_hours_mode)
+    error_message = "run_hours_mode must be \"reset\" or \"append\"."
+  }
+}

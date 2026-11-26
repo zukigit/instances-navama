@@ -18,10 +18,23 @@ resource "google_compute_instance" "outline" {
 
   # SSH key Terraform uses to run postscript.sh (see provision.tf).
   # OS Login is turned off for these VMs so the key in metadata is accepted.
-  metadata = {
-    ssh-keys       = "${var.ssh_user}:${trimspace(file(var.ssh_public_key_path))}"
-    enable-oslogin = "FALSE"
-  }
+  #
+  # run_hours > 0 adds a boot script that shuts the VM down after that many hours.
+  # It is plain metadata, so changing run_hours updates the VM in place (no recreate);
+  # the new value applies from the next boot.
+  metadata = merge(
+    {
+      ssh-keys       = "${var.ssh_user}:${trimspace(file(var.ssh_public_key_path))}"
+      enable-oslogin = "FALSE"
+    },
+    var.run_hours > 0 ? {
+      startup-script = <<-EOT
+        #!/bin/bash
+        # Managed by Terraform (run_hours = ${var.run_hours}). Stops the VM after ${var.run_hours}h of uptime.
+        shutdown -h +${var.run_hours * 60} "run_hours limit (${var.run_hours}h) reached"
+      EOT
+    } : {}
+  )
 
   boot_disk {
     auto_delete = true
@@ -45,6 +58,14 @@ resource "google_compute_instance" "outline" {
       network_tier = "STANDARD"
     }
   }
+
+  # Keep the VM running: if it was stopped (e.g. by the run_hours boot script),
+  # the next `terraform apply` starts it again, which also restarts the timer.
+  desired_status = "RUNNING"
+
+  # Lets Terraform stop the VM briefly for changes that need it
+  # (such as changing the machine type).
+  allow_stopping_for_update = true
 
   scheduling {
     on_host_maintenance = "MIGRATE"

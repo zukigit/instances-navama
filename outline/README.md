@@ -54,6 +54,38 @@ Or set `regions` in `terraform.tfvars`, which Terraform reads automatically.
 
 Every region in the list gets its own instance. If you edit the list later, the next `apply` creates instances for regions you added and **destroys** instances for regions you removed.
 
+### Stopping instances after a set time
+
+Set `run_hours` to have GCP stop each VM after it has been running that long (default `0`, no limit):
+
+```bash
+terraform apply -var='run_hours=12'
+```
+
+This adds a small boot script to the VM's metadata that runs `shutdown -h +<minutes>` at every boot, so the timer starts each time the VM boots. Changing `run_hours` updates the VM in place (it is not recreated). On a running VM, Terraform also logs in over SSH and updates the scheduled shutdown right away. `run_hours_mode` picks how:
+
+| Mode | `run_hours=24` means |
+|---|---|
+| `reset` (default) | Shut down exactly 24 hours from now, whatever was scheduled before |
+| `append` | Add 24 hours to the time currently left (from now if nothing is scheduled) |
+
+```bash
+terraform apply -var='run_hours=24'                              # reset: stop 24h from now
+terraform apply -var='run_hours=24' -var='run_hours_mode=append' # add 24h to the time left
+terraform apply -var='run_hours=0'                               # cancel the scheduled shutdown
+```
+
+Terraform only acts when `run_hours` or `run_hours_mode` changes. To run it again with the same values (for example, append another 24 hours), force it:
+
+```bash
+terraform apply -var='run_hours=24' -var='run_hours_mode=append' \
+  -replace='terraform_data.shutdown_timer["us-west1"]'
+```
+
+A VM created in the same `apply` always uses `reset`, since its boot script has just scheduled `run_hours`. After any reboot, the boot script starts a fresh `run_hours` countdown, and earlier appended time does not carry over.
+
+The shutdown runs inside the VM, so someone logged in could cancel it with `sudo shutdown -c`. The VMs have `desired_status = "RUNNING"`, so after a VM is stopped, the next `terraform apply` starts it again with a fresh timer. Stopping keeps the disk, so Outline stays installed, but the VM gets a new external IP unless you reserve a static one, so existing access keys stop working.
+
 ### Viewing the instances
 
 ```bash
@@ -117,6 +149,8 @@ gcloud compute firewall-rules update allow-outline-ssh --disabled      # close
 | `ssh_public_key_path` | `~/.ssh/id_ed25519.pub` | Public key added to the VMs |
 | `ssh_private_key_path` | `~/.ssh/id_ed25519` | Private key Terraform uses to log in |
 | `close_ssh_after_install` | `true` | Turn the SSH rule off after the install finishes |
+| `run_hours` | `0` (no limit) | Stop each VM after this many hours of running; `apply` starts it again |
+| `run_hours_mode` | `reset` | `reset`: stop `run_hours` from now; `append`: add `run_hours` to the time left |
 | `ssh_source_ranges` | `["0.0.0.0/0"]` | Sources allowed to SSH in; narrow to your IP |
 | `outline_api_port` | `8443` | Outline management API port (TCP) |
 | `outline_keys_port` | `9443` | Outline access keys port (TCP and UDP) |
