@@ -6,3 +6,15 @@
 terraform.tfvars
 *.auto.tfvars
 .terraform.lock.hcl
+
+# Saved plans and apply logs (contain variable values, IPs and Outline apiUrl)
+tfplan
+*.tfplan
+*.log
+
+# Keys and credentials
+*.pem
+*.key
+id_*
+*credentials*.json
+access.txt

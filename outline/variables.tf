@@ -122,3 +122,51 @@ variable "outline_udp_ports" {
   type        = list(string)
   default     = ["9443"]
 }
+
+variable "run_postscript" {
+  description = "Run postscript.sh (Docker + Outline install) on each instance over SSH after it is created."
+  type        = bool
+  default     = true
+}
+
+variable "ssh_user" {
+  description = "Linux user Terraform logs in as to run postscript.sh."
+  type        = string
+  default     = "outline"
+}
+
+variable "ssh_public_key_path" {
+  description = "Public key added to the instances for ssh_user."
+  type        = string
+  default     = "~/.ssh/id_ed25519.pub"
+}
+
+variable "ssh_private_key_path" {
+  description = "Private key Terraform uses to SSH in. Only the path is used; the key never leaves your machine except for the SSH login."
+  type        = string
+  default     = "~/.ssh/id_ed25519"
+}
+
+variable "ssh_source_ranges" {
+  description = "Source IPv4 ranges allowed to SSH to the instances. Narrow this to your own IP (e.g. [\"203.0.113.4/32\"])."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
+variable "outline_api_port" {
+  description = "Outline management API port (TCP). Must be in outline_tcp_ports."
+  type        = number
+  default     = 8443
+}
+
+variable "outline_keys_port" {
+  description = "Outline access keys port (TCP and UDP). Must be in outline_tcp_ports and outline_udp_ports."
+  type        = number
+  default     = 9443
+}
+
+variable "close_ssh_after_install" {
+  description = "Turn the SSH firewall rule off after postscript.sh finishes on all instances (needs gcloud). It is turned back on automatically before the next install."
+  type        = bool
+  default     = true
+}

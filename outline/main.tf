@@ -16,6 +16,13 @@ resource "google_compute_instance" "outline" {
   tags   = [var.tag_name]
   labels = var.labels
 
+  # SSH key Terraform uses to run postscript.sh (see provision.tf).
+  # OS Login is turned off for these VMs so the key in metadata is accepted.
+  metadata = {
+    ssh-keys       = "${var.ssh_user}:${trimspace(file(var.ssh_public_key_path))}"
+    enable-oslogin = "FALSE"
+  }
+
   boot_disk {
     auto_delete = true
     device_name = "${var.instance_name_prefix}-${each.key}"

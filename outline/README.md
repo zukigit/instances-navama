@@ -13,6 +13,7 @@ Terraform that creates one Outline VM per region, plus a firewall rule that open
 - **One firewall rule**, named `firewall_name` (default `allow-outline`): incoming traffic from `0.0.0.0/0` to instances tagged with `tag_name`, priority 1000.
   - TCP: `8443`, `9443`
   - UDP: `9443`
+- **An SSH firewall rule**, `<firewall_name>-ssh`: TCP 22 from `ssh_source_ranges` to the same tag, so Terraform can run `postscript.sh`. Turned off after the install by default.
 
 ## Requirements
 
@@ -67,6 +68,29 @@ This prints each instance's name, zone, internal IP and external IP, grouped by 
 terraform destroy
 ```
 
+### Installing Outline
+
+After each VM is created, Terraform connects over SSH and runs `postscript.sh`, which installs Docker and Outline server. Every line it prints shows up in the `terraform apply` output, prefixed with the instance it came from:
+
+```
+terraform_data.outline_install["us-west1"] (remote-exec): ...
+```
+
+At the end it prints the Outline Manager config (`apiUrl` and `certSha256`) from `/opt/outline/access.txt`. Copy it into Outline Manager. To also keep the whole log in a file:
+
+```bash
+terraform apply 2>&1 | tee apply.log
+```
+
+This needs an SSH key pair, `~/.ssh/id_ed25519` by default (`ssh-keygen -t ed25519` if you don't have one). If the install fails, the VM is kept and the next `apply` runs the script again. Editing `postscript.sh` also makes the next `apply` re-run it on every instance. Set `run_postscript = false` to skip the install.
+
+Port 22 is only open while the install runs. Before installing, Terraform turns the `<firewall_name>-ssh` rule on; once every instance has finished, it turns the rule off again with `gcloud`, so `gcloud` must be installed and signed in (`gcloud auth login`). If an install fails, the rule stays on so you can SSH in and debug; the next successful `apply` turns it off. Set `close_ssh_after_install = false` to keep port 22 open. To open it by hand later:
+
+```bash
+gcloud compute firewall-rules update allow-outline-ssh --no-disabled   # open
+gcloud compute firewall-rules update allow-outline-ssh --disabled      # close
+```
+
 ## Variables
 
 | Variable | Default | Description |
@@ -88,6 +112,14 @@ terraform destroy
 | `firewall_source_ranges` | `["0.0.0.0/0"]` | Source addresses allowed through the firewall |
 | `outline_tcp_ports` | `["8443", "9443"]` | TCP ports to open |
 | `outline_udp_ports` | `["9443"]` | UDP ports to open |
+| `run_postscript` | `true` | Run `postscript.sh` on each instance after it is created |
+| `ssh_user` | `outline` | User Terraform logs in as |
+| `ssh_public_key_path` | `~/.ssh/id_ed25519.pub` | Public key added to the VMs |
+| `ssh_private_key_path` | `~/.ssh/id_ed25519` | Private key Terraform uses to log in |
+| `close_ssh_after_install` | `true` | Turn the SSH rule off after the install finishes |
+| `ssh_source_ranges` | `["0.0.0.0/0"]` | Sources allowed to SSH in; narrow to your IP |
+| `outline_api_port` | `8443` | Outline management API port (TCP) |
+| `outline_keys_port` | `9443` | Outline access keys port (TCP and UDP) |
 
 You can override any of these with `-var` or in `terraform.tfvars`. Never commit `terraform.tfvars`; put shareable examples in `terraform.tfvars.example`.
 
