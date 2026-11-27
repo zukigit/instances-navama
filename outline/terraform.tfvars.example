@@ -27,6 +27,8 @@ firewall_name = "allow-outline"
 # close_ssh_after_install = true
 
 # Stop each VM after this many hours of running (0 = no limit). Restarts on next apply.
-# run_hours = 720   # 30 days
+# Keep the value you want here; a plain `terraform apply` resets it to this.
+# e.g. 12 = 12 hours, 720 = 30 days
+run_hours = 0
 # How a run_hours change applies to a running VM: "reset" (from now) or "append" (add to time left).
 # run_hours_mode = "reset"
