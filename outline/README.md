@@ -86,6 +86,18 @@ A VM created in the same `apply` always uses `reset`, since its boot script has 
 
 The shutdown runs inside the VM, so someone logged in could cancel it with `sudo shutdown -c`. The VMs have `desired_status = "RUNNING"`, so after a VM is stopped, the next `terraform apply` starts it again with a fresh timer. Stopping keeps the disk, so Outline stays installed, but the VM gets a new external IP unless you reserve a static one, so existing access keys stop working.
 
+### After a restart (new IP)
+
+The external IP is ephemeral, so it changes every time a VM is stopped and started. A boot script (`startup.sh.tftpl`, set as the VM's `startup-script` metadata) handles Outline's side automatically at every boot:
+
+- reads the VM's current external IP from the metadata server
+- if it differs from the IP in `/opt/outline/access.txt`, tells Outline the new IP (`PUT /server/hostname-for-access-keys` on the local API) and updates `apiUrl` in `access.txt`
+
+It works for any restart: `terraform apply`, `gcloud compute instances start`, or the Console. Its log is in `sudo journalctl -u google-startup-scripts` on the VM. What is still up to you:
+
+1. In Outline Manager, remove the server and add it again with the `apiUrl` using the new IP (same secret and `certSha256`; `terraform output instances` shows the IP).
+2. Share the access keys again: Manager now shows them with the new IP, but keys already handed out still point to the old one.
+
 ### Viewing the instances
 
 ```bash

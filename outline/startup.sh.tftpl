@@ -1,0 +1,49 @@
+#!/bin/bash
+# Managed by Terraform (main.tf, startup.sh.tftpl). Runs as root at every boot.
+%{ if run_minutes > 0 ~}
+
+# run_hours: stop the VM after ${run_hours}h of uptime.
+shutdown -h +${run_minutes} "run_hours limit (${run_hours}h) reached"
+%{ endif ~}
+%{ if update_outline_hostname ~}
+
+# Outline: the external IP is ephemeral and changes when the VM is stopped and
+# started. Point Outline's access keys at this boot's IP, and keep
+# /opt/outline/access.txt (apiUrl) in sync.
+ACCESS=/opt/outline/access.txt
+if [ ! -f "$ACCESS" ]; then
+  echo "outline-hostname: $ACCESS not found (Outline not installed yet), skipping"
+  exit 0
+fi
+
+NEW_IP=$(curl -fs -H 'Metadata-Flavor: Google' \
+  http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip || true)
+if [ -z "$NEW_IP" ]; then
+  echo "outline-hostname: no external IP found, skipping"
+  exit 0
+fi
+
+API_URL=$(sed -n 's/^apiUrl://p' "$ACCESS")
+OLD_IP=$(echo "$API_URL" | sed -E 's#^https://([^:/]+).*#\1#')
+PORT=$(echo "$API_URL" | sed -E 's#^https://[^:/]+:([0-9]+)/.*#\1#')
+SECRET_PATH=$(echo "$API_URL" | sed -E 's#^https://[^/]+##')
+
+if [ "$OLD_IP" = "$NEW_IP" ]; then
+  echo "outline-hostname: IP unchanged ($NEW_IP)"
+  exit 0
+fi
+
+# Outline's containers may still be starting; retry for up to 5 minutes.
+for _ in $(seq 1 60); do
+  if curl -fsk -X PUT -H 'Content-Type: application/json' \
+    -d "{\"hostname\":\"$NEW_IP\"}" \
+    "https://127.0.0.1:$PORT$SECRET_PATH/server/hostname-for-access-keys"; then
+    sed -i "s#^apiUrl:https://[^:/]*#apiUrl:https://$NEW_IP#" "$ACCESS"
+    echo "outline-hostname: updated $OLD_IP -> $NEW_IP"
+    exit 0
+  fi
+  sleep 5
+done
+echo "outline-hostname: failed to update Outline hostname to $NEW_IP" >&2
+exit 1
+%{ endif ~}

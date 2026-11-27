@@ -19,20 +19,23 @@ resource "google_compute_instance" "outline" {
   # SSH key Terraform uses to run postscript.sh (see provision.tf).
   # OS Login is turned off for these VMs so the key in metadata is accepted.
   #
-  # run_hours > 0 adds a boot script that shuts the VM down after that many hours.
-  # It is plain metadata, so changing run_hours updates the VM in place (no recreate);
-  # the new value applies from the next boot.
+  # Boot script (startup.sh.tftpl), run at every boot:
+  #   - run_hours > 0: shuts the VM down after that many hours
+  #   - run_postscript: points Outline's access keys at the new external IP
+  #     when it changed (ephemeral IPs change on every stop/start)
+  # It is plain metadata, so changes update the VM in place (no recreate) and
+  # take effect from the next boot.
   metadata = merge(
     {
       ssh-keys       = "${var.ssh_user}:${trimspace(file(var.ssh_public_key_path))}"
       enable-oslogin = "FALSE"
     },
-    var.run_hours > 0 ? {
-      startup-script = <<-EOT
-        #!/bin/bash
-        # Managed by Terraform (run_hours = ${var.run_hours}). Stops the VM after ${var.run_hours}h of uptime.
-        shutdown -h +${var.run_hours * 60} "run_hours limit (${var.run_hours}h) reached"
-      EOT
+    var.run_hours > 0 || var.run_postscript ? {
+      startup-script = templatefile("${path.module}/startup.sh.tftpl", {
+        run_hours               = var.run_hours
+        run_minutes             = var.run_hours * 60
+        update_outline_hostname = var.run_postscript
+      })
     } : {}
   )
 
