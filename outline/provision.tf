@@ -51,7 +51,9 @@ resource "terraform_data" "outline_install" {
 
 # Step 2: Outline access keys (only when access_keys is set). Runs when the VM
 # is new or run_hours, run_hours_mode or access_keys changes:
-#   reset  -> delete all keys, create the ones in access_keys, print the ss:// links
+#   reset  -> sync keys with access_keys by name: existing keys keep their ss://
+#             link and get usage 0 and the new limit, new names get new keys,
+#             keys not listed are deleted; prints all ss:// links
 #   append -> keep the keys; at the currently scheduled shutdown (the old timer),
 #             reset every key's data usage to 0 (same ss:// links). Runs before
 #             shutdown_timer moves that shutdown.

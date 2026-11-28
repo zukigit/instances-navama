@@ -5,8 +5,10 @@
 #
 # Usage:
 #   outline-access-keys reset <keys_json_base64>
-#       Delete every access key, then create the keys in access_keys (from
-#       terraform.tfvars) and print their ss:// links. Cancels pending usage resets.
+#       Sync the keys with access_keys (from terraform.tfvars) by name: existing
+#       keys keep their ss:// link and get usage 0 and the new limit, missing
+#       ones are created, others deleted. Prints all ss:// links. Cancels
+#       pending usage resets.
 #   outline-access-keys append
 #       Keep the keys as they are, and schedule a usage reset at the currently
 #       scheduled shutdown (the "old timer"). Run before the shutdown is moved.
@@ -84,6 +86,21 @@ remove_reset_units() {
   if [ "$changed" = 1 ]; then systemctl daemon-reload; fi
 }
 
+# create_key <json body> -> prints the created key's JSON. Retries briefly.
+create_key() {
+  local resp
+  for _ in 1 2 3 4 5; do
+    resp=$(api POST /access-keys -d "$1") && { echo "$resp"; return 0; }
+    sleep 2
+  done
+  return 1
+}
+
+# Syncs the server's keys with access_keys, by name:
+#   name in access_keys, key exists -> recreated with the same password and port
+#                                      (same ss:// link), new limit, usage 0
+#   name in access_keys, no key     -> created (new ss:// link)
+#   key not in access_keys          -> deleted
 cmd_reset() {
   local keys_json
   keys_json=$(echo "${1:?keys_json_base64 required}" | base64 -d)
@@ -91,23 +108,53 @@ cmd_reset() {
   wait_for_api
   remove_reset_units all
 
-  local id
-  for id in $(api GET /access-keys | jq -r '.accessKeys[].id'); do
+  local current
+  current=$(api GET /access-keys)
+  mkdir -p "$STATE_DIR"
+  chmod 700 "$STATE_DIR"
+  local backup="$STATE_DIR/before-reset-$(date +%s).json"
+  (umask 077 && echo "$current" >"$backup")
+
+  local key id name
+  # Keys not in access_keys (and duplicate names) are deleted.
+  while read -r key; do
+    id=$(jq -r .id <<<"$key")
+    name=$(jq -r .name <<<"$key")
     api DELETE "/access-keys/$id" >/dev/null
-    echo "access-keys: deleted key $id"
-  done
+    echo "access-keys: deleted '$name' (key $id: not in access_keys, or a duplicate name)"
+  done < <(jq -c --argjson want "$keys_json" '
+    .accessKeys | group_by(.name)
+    | map(if (.[0].name | in($want)) then .[1:] else . end) | add // [] | .[]' <<<"$current")
 
   echo
   echo "===== Outline access keys ====="
-  local entry body resp name
+  local entry limit old body resp status failed=0
   while read -r entry; do
-    body=$(jq -c '{name: .key}
-      + (if .value.data_limit_gb == null then {}
-         else {limit: {bytes: (.value.data_limit_gb * 1000000000 | floor)}} end)' <<<"$entry")
-    resp=$(api POST /access-keys -d "$body")
-    name=$(jq -r .name <<<"$resp")
-    echo "$name ($(gb "$(jq -r '.dataLimit.bytes // empty' <<<"$resp")")): $(jq -r .accessUrl <<<"$resp")"
+    name=$(jq -r .key <<<"$entry")
+    limit=$(jq -c 'if .value.data_limit_gb == null then null
+      else {bytes: (.value.data_limit_gb * 1000000000 | floor)} end' <<<"$entry")
+    old=$(jq -c --arg n "$name" '[.accessKeys[] | select(.name == $n)][0] // empty' <<<"$current")
+    if [ -n "$old" ]; then
+      # Same password and port = same ss:// link; the new key ID starts at 0.
+      body=$(jq -c --argjson l "$limit" '{name, password, port, method}
+        + (if $l == null then {} else {limit: $l} end)' <<<"$old")
+      api DELETE "/access-keys/$(jq -r .id <<<"$old")" >/dev/null
+      status="same link, usage reset to 0"
+    else
+      body=$(jq -c -n --arg n "$name" --argjson l "$limit" '{name: $n}
+        + (if $l == null then {} else {limit: $l} end)')
+      status="NEW link"
+    fi
+    if resp=$(create_key "$body"); then
+      echo "$name ($(gb "$(jq -r '.dataLimit.bytes // empty' <<<"$resp")"), $status): $(jq -r .accessUrl <<<"$resp")"
+    else
+      echo "access-keys: FAILED to create '$name'; see $backup on the VM" >&2
+      failed=1
+    fi
   done < <(jq -c 'to_entries[]' <<<"$keys_json")
+
+  if [ "$failed" = 0 ]; then rm -f "$backup"; fi
+  return "$failed"
 }
 
 cmd_append() {
@@ -167,13 +214,7 @@ cmd_reset_usage() {
     body=$(jq -c '{name, password, port, method}
       + (if .dataLimit == null then {} else {limit: .dataLimit} end)' <<<"$key")
     api DELETE "/access-keys/$id" >/dev/null
-    resp=""
-    for _ in 1 2 3 4 5; do
-      resp=$(api POST /access-keys -d "$body") && break
-      resp=""
-      sleep 2
-    done
-    if [ -n "$resp" ]; then
+    if resp=$(create_key "$body"); then
       echo "access-keys: usage reset for '$name' (key $id -> $(jq -r .id <<<"$resp"))"
     else
       echo "access-keys: FAILED to recreate '$name' (key $id); see $backup" >&2
