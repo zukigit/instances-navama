@@ -200,6 +200,7 @@ You can override any of these with `-var` or in `terraform.tfvars`. Never commit
 
 ## Notes
 
+- **Ports:** `outline_api_port` and `outline_keys_port` are used when Outline is installed, so they only take effect on a new VM. Changing them later does nothing to an existing server; replace the VM (`-replace='google_compute_instance.outline["<region>"]'`) to use new ports, which gives new keys and links. The firewall ports (`outline_tcp_ports`, `outline_udp_ports`) must include them; `plan` stops with an error if they don't.
 - **Cost:** the free e2-micro only applies in `us-west1`, `us-central1` and `us-east1`. Instances in any other region are billed.
 - **External IPs are temporary.** An instance's IP can change when it is stopped and started, so any Outline access keys that use that IP stop working. Reserve a static address if you need it to stay the same.
 - **State:** Terraform keeps its state in a local `terraform.tfstate` file, which is not committed to git. Keep that file somewhere safe; without it, Terraform can no longer manage the instances it created.

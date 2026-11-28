@@ -135,6 +135,7 @@ The timer step tells these apart by comparing the VM's boot time with the plan t
 - **Outline counts usage over a rolling 30 days.** Without a reset, usage older than 30 days drops off on its own.
 - **A failed timer step in `append` mode:** if the step fails after it has already moved the end (for example, the SSH connection drops at the very end), Terraform re-runs it on the next apply and appends `run_hours` again. Check the end on the VM (see [Checking the state](#checking-the-state-on-a-vm)) before re-applying after such a failure.
 - **`sudo shutdown -c` on the VM** cancels the shutdown but not the saved end. A VM that keeps running past its end gets no new period, and no usage reset, until the next `apply` that changes `run_hours` or uses `-replace`. A later boot then starts a new period, because the end has passed.
+- **Outline's ports** (`outline_api_port`, `outline_keys_port`) are set at install, so changing them later doesn't affect an existing VM. `plan` stops if the firewall ports don't include them.
 - **Port 22:** each SSH step opens the `<firewall_name>-ssh` rule first, and `ssh_close` closes it at the end. If a step fails, the rule stays open until the next successful apply. If `default-allow-ssh` is enabled, it keeps port 22 open regardless.
 
 ## Checking the state on a VM

@@ -16,6 +16,30 @@ resource "google_compute_firewall" "outline" {
     protocol = "udp"
     ports    = var.outline_udp_ports
   }
+
+  # Outline is installed on outline_api_port (TCP) and outline_keys_port (TCP
+  # and UDP); stop the plan if this rule wouldn't let them through.
+  lifecycle {
+    precondition {
+      condition     = local.ports_open
+      error_message = "The firewall doesn't open Outline's ports: outline_tcp_ports must include outline_api_port (${var.outline_api_port}) and outline_keys_port (${var.outline_keys_port}), and outline_udp_ports must include outline_keys_port."
+    }
+  }
+}
+
+locals {
+  # Is port p in a firewall port list? Entries are single ports or ranges ("9000-9500").
+  tcp_has = { for p in [var.outline_api_port, var.outline_keys_port] : tostring(p) => anytrue([
+    for e in var.outline_tcp_ports : length(split("-", e)) == 2
+    ? (p >= tonumber(split("-", e)[0]) && p <= tonumber(split("-", e)[1]))
+    : tonumber(e) == p
+  ]) }
+  udp_has_keys = anytrue([
+    for e in var.outline_udp_ports : length(split("-", e)) == 2
+    ? (var.outline_keys_port >= tonumber(split("-", e)[0]) && var.outline_keys_port <= tonumber(split("-", e)[1]))
+    : tonumber(e) == var.outline_keys_port
+  ])
+  ports_open = alltrue(values(local.tcp_has)) && local.udp_has_keys
 }
 
 # SSH access so Terraform can run postscript.sh on the instances.
