@@ -20,7 +20,8 @@ resource "google_compute_instance" "outline" {
   # OS Login is turned off for these VMs so the key in metadata is accepted.
   #
   # Boot script (startup.sh.tftpl), run at every boot:
-  #   - run_hours > 0: shuts the VM down after that many hours
+  #   - run_hours > 0: continues the current run_hours period after a reboot,
+  #     or starts a new one if it ended while the VM was off (MODES.md)
   #   - run_postscript: points Outline's access keys at the new external IP
   #     when it changed (ephemeral IPs change on every stop/start)
   # It is plain metadata, so changes update the VM in place (no recreate) and
@@ -33,8 +34,8 @@ resource "google_compute_instance" "outline" {
     var.run_hours > 0 || var.run_postscript ? {
       startup-script = templatefile("${path.module}/startup.sh.tftpl", {
         run_hours               = var.run_hours
-        run_minutes             = var.run_hours * 60
         update_outline_hostname = var.run_postscript
+        manage_keys             = local.manage_keys
       })
     } : {}
   )

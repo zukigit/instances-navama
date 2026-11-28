@@ -1,49 +1,81 @@
 #!/bin/bash
 # Managed by Terraform (main.tf, startup.sh.tftpl). Runs as root at every boot.
-%{ if run_minutes > 0 ~}
+# See MODES.md for the period logic.
+PREVIOUS_PERIOD_ENDED=false
+%{ if run_hours > 0 ~}
 
-# run_hours: stop the VM after ${run_hours}h of uptime.
-shutdown -h +${run_minutes} "run_hours limit (${run_hours}h) reached"
+# run_hours period. Its end is saved in END_FILE (by this script and by
+# shutdown-timer.sh), so a reboot does not change it:
+#   end still ahead -> continue the period: shut down at the saved end
+#   end passed/none -> new period of ${run_hours}h from now (usage reset below)
+END_FILE=/var/lib/outline-period/end
+BOOT_STATE=/run/outline-period/boot
+mkdir -p /var/lib/outline-period /run/outline-period
+NOW=$(date +%s)
+END=$(cat "$END_FILE" 2>/dev/null || true)
+if [ -n "$END" ] && [ "$END" -gt $((NOW + 60)) ]; then
+  echo "outline-period: continuing the current period, ends $(date -d "@$END")"
+  echo continue >"$BOOT_STATE"
+else
+  [ -n "$END" ] && PREVIOUS_PERIOD_ENDED=true
+  END=$((NOW + ${run_hours * 3600}))
+  echo "$END" >"$END_FILE"
+  echo new >"$BOOT_STATE"
+  echo "outline-period: new period of ${run_hours}h, ends $(date -d "@$END")"
+fi
+shutdown -h "+$(((END - NOW + 59) / 60))" "run_hours period ended"
 %{ endif ~}
 %{ if update_outline_hostname ~}
 
 # Outline: the external IP is ephemeral and changes when the VM is stopped and
 # started. Point Outline's access keys at this boot's IP, and keep
 # /opt/outline/access.txt (apiUrl) in sync.
-ACCESS=/opt/outline/access.txt
-if [ ! -f "$ACCESS" ]; then
-  echo "outline-hostname: $ACCESS not found (Outline not installed yet), skipping"
-  exit 0
-fi
-
-NEW_IP=$(curl -fs -H 'Metadata-Flavor: Google' \
-  http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip || true)
-if [ -z "$NEW_IP" ]; then
-  echo "outline-hostname: no external IP found, skipping"
-  exit 0
-fi
-
-API_URL=$(sed -n 's/^apiUrl://p' "$ACCESS")
-OLD_IP=$(echo "$API_URL" | sed -E 's#^https://([^:/]+).*#\1#')
-PORT=$(echo "$API_URL" | sed -E 's#^https://[^:/]+:([0-9]+)/.*#\1#')
-SECRET_PATH=$(echo "$API_URL" | sed -E 's#^https://[^/]+##')
-
-if [ "$OLD_IP" = "$NEW_IP" ]; then
-  echo "outline-hostname: IP unchanged ($NEW_IP)"
-  exit 0
-fi
-
-# Outline's containers may still be starting; retry for up to 5 minutes.
-for _ in $(seq 1 60); do
-  if curl -fsk -X PUT -H 'Content-Type: application/json' \
-    -d "{\"hostname\":\"$NEW_IP\"}" \
-    "https://127.0.0.1:$PORT$SECRET_PATH/server/hostname-for-access-keys"; then
-    sed -i "s#^apiUrl:https://[^:/]*#apiUrl:https://$NEW_IP#" "$ACCESS"
-    echo "outline-hostname: updated $OLD_IP -> $NEW_IP"
-    exit 0
+update_hostname() {
+  local ACCESS=/opt/outline/access.txt NEW_IP API_URL OLD_IP PORT SECRET_PATH
+  if [ ! -f "$ACCESS" ]; then
+    echo "outline-hostname: $ACCESS not found (Outline not installed yet), skipping"
+    return 0
   fi
-  sleep 5
-done
-echo "outline-hostname: failed to update Outline hostname to $NEW_IP" >&2
-exit 1
+
+  NEW_IP=$(curl -fs -H 'Metadata-Flavor: Google' \
+    http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip || true)
+  if [ -z "$NEW_IP" ]; then
+    echo "outline-hostname: no external IP found, skipping"
+    return 0
+  fi
+
+  API_URL=$(sed -n 's/^apiUrl://p' "$ACCESS")
+  OLD_IP=$(echo "$API_URL" | sed -E 's#^https://([^:/]+).*#\1#')
+  PORT=$(echo "$API_URL" | sed -E 's#^https://[^:/]+:([0-9]+)/.*#\1#')
+  SECRET_PATH=$(echo "$API_URL" | sed -E 's#^https://[^/]+##')
+
+  if [ "$OLD_IP" = "$NEW_IP" ]; then
+    echo "outline-hostname: IP unchanged ($NEW_IP)"
+    return 0
+  fi
+
+  # Outline's containers may still be starting; retry for up to 5 minutes.
+  for _ in $(seq 1 60); do
+    if curl -fsk -X PUT -H 'Content-Type: application/json' \
+      -d "{\"hostname\":\"$NEW_IP\"}" \
+      "https://127.0.0.1:$PORT$SECRET_PATH/server/hostname-for-access-keys"; then
+      sed -i "s#^apiUrl:https://[^:/]*#apiUrl:https://$NEW_IP#" "$ACCESS"
+      echo "outline-hostname: updated $OLD_IP -> $NEW_IP (all ss:// links now use the new IP)"
+      return 0
+    fi
+    sleep 5
+  done
+  echo "outline-hostname: failed to update Outline hostname to $NEW_IP" >&2
+  return 1
+}
+update_hostname
+%{ endif ~}
+%{ if manage_keys ~}
+
+# The previous period ended while the VM was off: this boot starts a new one,
+# so every access key starts again at 0 usage (same ss:// links).
+if [ "$PREVIOUS_PERIOD_ENDED" = true ] && [ -x /usr/local/sbin/outline-access-keys ]; then
+  /usr/local/sbin/outline-access-keys cancel-resets
+  /usr/local/sbin/outline-access-keys reset-usage
+fi
 %{ endif ~}

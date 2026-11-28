@@ -2,6 +2,8 @@
 
 Terraform that creates one Outline VM per region, plus a firewall rule that opens the Outline ports on every VM with the network tag `tag_name` (default `outline-nw`).
 
+For what each mode (`reset`, `append`, boot, IP change) does step by step, see [MODES.md](MODES.md).
+
 ## What gets created
 
 - **One VM per region** in `regions`, named `outline-<region>` (for example `outline-us-west1`). Each VM is:
@@ -54,37 +56,34 @@ Or set `regions` in `terraform.tfvars`, which Terraform reads automatically.
 
 Every region in the list gets its own instance. If you edit the list later, the next `apply` creates instances for regions you added and **destroys** instances for regions you removed.
 
-### Stopping instances after a set time
+### Run periods (stopping instances after a set time)
 
-Set `run_hours` to have GCP stop each VM after it has been running that long (default `0`, no limit):
+Set `run_hours` to have each VM stop after that many hours (default `0`, no limit). The time between the start of the period and the shutdown is a **period**. Keep `run_hours` and `run_hours_mode` in `terraform.tfvars`, not only in `-var` (see the warning below):
 
-```bash
-terraform apply -var='run_hours=12'
+```hcl
+run_hours      = 720       # 30 days
+run_hours_mode = "reset"   # or "append"
 ```
 
-This adds a small boot script to the VM's metadata that runs `shutdown -h +<minutes>` at every boot, so the timer starts each time the VM boots. Changing `run_hours` updates the VM in place (it is not recreated). On a running VM, Terraform also logs in over SSH and updates the scheduled shutdown right away. `run_hours_mode` picks how:
+Terraform acts on a running VM when `run_hours` changes. `run_hours_mode` says how; changing only the mode does nothing.
 
-| Mode | `run_hours=24` means |
+| Mode | `run_hours = 24` means |
 |---|---|
-| `reset` (default) | Shut down exactly 24 hours from now, whatever was scheduled before |
-| `append` | Add 24 hours to the time currently left (from now if nothing is scheduled) |
+| `reset` (default) | New period now: stop 24 hours from now, and every access key's usage goes to 0 now |
+| `append` | Stop 24 hours after the current period's end. Usage stays as it is until that old end, then goes to 0 |
+| `run_hours = 0` | No shutdown (cancels the pending one) |
+
+To run it again with the same values (for example, append another 24 hours, or start a new period now), force it:
 
 ```bash
-terraform apply -var='run_hours=24'                              # reset: stop 24h from now
-terraform apply -var='run_hours=24' -var='run_hours_mode=append' # add 24h to the time left
-terraform apply -var='run_hours=0'                               # cancel the scheduled shutdown
+terraform apply -replace='terraform_data.shutdown_timer["us-west1"]'
 ```
 
-Terraform only acts when `run_hours` or `run_hours_mode` changes. To run it again with the same values (for example, append another 24 hours), force it:
+The period's end is saved on the VM, so **a reboot doesn't change it**. At every boot, the boot script either continues the period (its end is still ahead) or, if the end passed while the VM was off, starts a new `run_hours` period with usage reset to 0. So after the timer has stopped a VM, a plain `terraform apply` starts it again in a new period. `desired_status = "RUNNING"` makes every apply start a stopped VM.
 
-```bash
-terraform apply -var='run_hours=24' -var='run_hours_mode=append' \
-  -replace='terraform_data.shutdown_timer["us-west1"]'
-```
+> **Warning:** a plain `terraform apply` uses `terraform.tfvars`. If you ran `apply -var='run_hours=24'` and `terraform.tfvars` says `720`, the next plain apply sees a change back to `720` and runs again, in reset mode if that's the mode in `terraform.tfvars`, resetting everyone's usage now.
 
-A VM created in the same `apply` always uses `reset`, since its boot script has just scheduled `run_hours`. After any reboot, the boot script starts a fresh `run_hours` countdown, and earlier appended time does not carry over.
-
-The shutdown runs inside the VM, so someone logged in could cancel it with `sudo shutdown -c`. The VMs have `desired_status = "RUNNING"`, so after a VM is stopped, the next `terraform apply` starts it again with a fresh timer. Stopping keeps the disk, so Outline stays installed, but the VM gets a new external IP unless you reserve a static one, so existing access keys stop working.
+The shutdown runs inside the VM, so someone logged in could cancel it with `sudo shutdown -c`. Stopping keeps the disk, so Outline stays installed, but the VM may get a new external IP, which changes every key's link (see [After a restart](#after-a-restart-new-ip)). For the exact logic in every case, see [MODES.md](MODES.md).
 
 ### Access keys (VPN keys)
 
@@ -100,18 +99,20 @@ access_keys = {
 ```
 terraform_data.access_keys["us-west1"] (remote-exec): ===== Outline access keys =====
 terraform_data.access_keys["us-west1"] (remote-exec): alice (200 GB): ss://...
+terraform_data.access_keys["us-west1"] (remote-exec): dave (50 GB, NEW link): ss://...
 ```
 
-What happens depends on `run_hours_mode`. The step runs when the VM is new, or when `run_hours`, `run_hours_mode` or `access_keys` changes:
+The step runs when the VM is new or `access_keys` changes, in either mode, and matches keys by name:
 
-| Mode | Keys |
+| On the server | Result |
 |---|---|
-| `reset` (and every new VM) | Syncs the server with `access_keys` by name, right away: a key that already exists keeps its `ss://` link and gets usage 0 and the limit from `access_keys`; a new name gets a new key; keys not in `access_keys` (including ones made in Manager) are deleted. Prints every link. Pending usage resets are cancelled. |
-| `append` | Keys stay as they are, and usage is unchanged for now. At the shutdown time that was scheduled before this apply (the old timer), every key's data usage goes back to 0, so a user with 50 GB left keeps 50 GB until then and gets the full limit after. |
+| Name in `access_keys`, key exists | Same key and link; the limit is set from `access_keys`; usage unchanged |
+| Name in `access_keys`, no key | New key and link (`NEW link`) |
+| Key not in `access_keys` (including ones made in Manager) | Deleted |
 
-How the usage reset works: Outline has no "reset usage" call and counts usage per key ID. So the key is deleted and created again with the same name, password and port; in `append` mode a systemd timer on the VM (`outline-usage-reset-<time>.timer`) does this for every key at the old timer time, keeping each data limit. The `ss://` link only holds the password, host and port, so **users keep the link they have**, and the new key ID starts at 0. Side effects: connected users drop for a moment, and Manager loses the usage history from before the reset. Each `append` adds its own reset, so appending twice before the first old time resets usage at both times. If the VM is off at that time, the reset runs at its next boot. To check pending resets on the VM: `systemctl list-timers 'outline-usage-reset-*'`.
+Usage is reset by the run periods, not by this step: at the start of each period, every key starts again at 0. Outline has no "reset usage" call and counts usage per key ID, so each key is deleted and created again with the same name, password, port and limit. The `ss://` link only holds the password, host and port, so **users keep the link they have**. Connected users drop for a moment, and Manager loses the usage history from before the reset. Usage resets for `append` are systemd timers on the VM: `systemctl list-timers 'outline-usage-reset-*'`.
 
-Links also contain the server's IP, so when the IP changes (see [After a restart](#after-a-restart-new-ip)) users need the new link either way. To give one user a new link (for example, if theirs leaked), rename their entry in `access_keys` and apply in `reset` mode. To reset usage again with the same values, force the step: `terraform apply -replace='terraform_data.access_keys["us-west1"]'`. With `access_keys` empty (default), Terraform does not touch the keys.
+Links also contain the server's IP, so when the IP changes users need their new link anyway. To give one user a new link (for example, if theirs leaked), rename their entry in `access_keys`. With `access_keys` empty (default), Terraform does not touch the keys or reset their usage. `access_keys` needs `run_postscript = true`.
 
 ### After a restart (new IP)
 
@@ -188,9 +189,9 @@ gcloud compute firewall-rules update allow-outline-ssh --disabled      # close
 | `ssh_public_key_path` | `~/.ssh/id_ed25519.pub` | Public key added to the VMs |
 | `ssh_private_key_path` | `~/.ssh/id_ed25519` | Private key Terraform uses to log in |
 | `close_ssh_after_install` | `true` | Turn the SSH rule off after the install finishes |
-| `run_hours` | `0` (no limit) | Stop each VM after this many hours of running; `apply` starts it again |
-| `run_hours_mode` | `reset` | `reset`: stop `run_hours` from now; `append`: add `run_hours` to the time left |
-| `access_keys` | `{}` (keys not managed) | Outline keys to create, `name = { data_limit_gb = N }`; see [Access keys](#access-keys-vpn-keys) |
+| `run_hours` | `0` (no limit) | Length of a run period; the VM stops at its end, and `apply` starts it again in a new period |
+| `run_hours_mode` | `reset` | How a `run_hours` change applies: `reset` starts a new period now (usage 0); `append` extends the current one (usage 0 at its old end) |
+| `access_keys` | `{}` (keys not managed) | Outline keys, `name = { data_limit_gb = N }`; see [Access keys](#access-keys-vpn-keys) |
 | `ssh_source_ranges` | `["0.0.0.0/0"]` | Sources allowed to SSH in; narrow to your IP |
 | `outline_api_port` | `8443` | Outline management API port (TCP) |
 | `outline_keys_port` | `9443` | Outline access keys port (TCP and UDP) |

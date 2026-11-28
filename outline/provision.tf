@@ -9,7 +9,9 @@
 # SSH steps in the apply have finished.
 locals {
   manage_ssh_rule = var.close_ssh_after_install
-  ssh_rule_cmd    = "gcloud compute firewall-rules update ${google_compute_firewall.outline_ssh.name} --project=${var.project_id} --quiet"
+  # Access keys need Outline, which run_postscript installs.
+  manage_keys  = var.run_postscript && length(var.access_keys) > 0
+  ssh_rule_cmd = "gcloud compute firewall-rules update ${google_compute_firewall.outline_ssh.name} --project=${var.project_id} --quiet"
   # Run before connecting; a no-op when close_ssh_after_install = false.
   ssh_open_cmd = local.manage_ssh_rule ? "${local.ssh_rule_cmd} --no-disabled" : "true"
 }
@@ -49,24 +51,21 @@ resource "terraform_data" "outline_install" {
   }
 }
 
-# Step 2: Outline access keys (only when access_keys is set). Runs when the VM
-# is new or run_hours, run_hours_mode or access_keys changes:
-#   reset  -> sync keys with access_keys by name: existing keys keep their ss://
-#             link and get usage 0 and the new limit, new names get new keys,
-#             keys not listed are deleted; prints all ss:// links
-#   append -> keep the keys; at the currently scheduled shutdown (the old timer),
-#             reset every key's data usage to 0 (same ss:// links). Runs before
-#             shutdown_timer moves that shutdown.
-# Re-run with the same values: -replace='terraform_data.access_keys["<region>"]'
-resource "terraform_data" "access_keys" {
-  for_each = var.run_postscript && length(var.access_keys) > 0 ? google_compute_instance.outline : {}
+# Step 2: the run_hours period on the running VM (the boot script only runs at
+# boot). Runs when the VM is new or run_hours changes; run_hours_mode only says
+# how, so switching the mode alone does nothing (MODES.md):
+#   reset  -> new period now: usage 0 now, shut down run_hours from now
+#   append -> shut down run_hours after the current end; usage resets to 0 at
+#             that current end (the old timer)
+# Same values again (e.g. append another 24h):
+#   terraform apply -replace='terraform_data.shutdown_timer["<region>"]'
+resource "terraform_data" "shutdown_timer" {
+  for_each = google_compute_instance.outline
 
   triggers_replace = [
     each.value.id,
     var.run_hours,
-    var.run_hours_mode,
-    jsonencode(var.access_keys),
-    filesha256("${path.module}/access-keys.sh"),
+    filesha256("${path.module}/shutdown-timer.sh"),
   ]
 
   connection {
@@ -85,6 +84,12 @@ resource "terraform_data" "access_keys" {
   }
 
   provisioner "file" {
+    source      = "${path.module}/shutdown-timer.sh"
+    destination = "/tmp/shutdown-timer.sh"
+  }
+
+  # The usage resets use the access keys script.
+  provisioner "file" {
     source      = "${path.module}/access-keys.sh"
     destination = "/tmp/access-keys.sh"
   }
@@ -92,30 +97,26 @@ resource "terraform_data" "access_keys" {
   provisioner "remote-exec" {
     inline = [
       "sudo install -m 0755 /tmp/access-keys.sh /usr/local/sbin/outline-access-keys",
-      # New VMs always get fresh keys.
-      timecmp(each.value.creation_timestamp, plantimestamp()) >= 0 || var.run_hours_mode == "reset"
-      ? "sudo /usr/local/sbin/outline-access-keys reset ${base64encode(jsonencode(var.access_keys))}"
-      : "sudo /usr/local/sbin/outline-access-keys append",
+      # plantimestamp() lets the script tell whether this apply started the VM
+      # (then a new period may already have been started by the boot script).
+      "bash /tmp/shutdown-timer.sh ${var.run_hours_mode} ${var.run_hours} ${local.manage_keys} ${plantimestamp()}",
     ]
   }
 }
 
-# Step 3: apply run_hours to the running VM right away (without a reboot).
-# The boot script only runs at boot, so when run_hours or run_hours_mode changes
-# this logs in and updates the scheduled shutdown:
-#   reset  -> shut down run_hours from now
-#   append -> shut down run_hours after the currently scheduled shutdown
-# run_hours = 0 cancels any scheduled shutdown.
-# To apply the same value again (e.g. append another 24h), use
-#   terraform apply -replace='terraform_data.shutdown_timer["<region>"]'
-resource "terraform_data" "shutdown_timer" {
-  for_each = google_compute_instance.outline
+# Step 3: Outline access keys (only when access_keys is set). Runs when the VM
+# is new or access_keys changes, in any mode. Syncs the keys by name and prints
+# every ss:// link; never changes usage (that is the period's job, step 2):
+#   existing name -> same key and link, limit from access_keys
+#   new name      -> new key and link
+#   not listed    -> deleted
+resource "terraform_data" "access_keys" {
+  for_each = local.manage_keys ? google_compute_instance.outline : {}
 
   triggers_replace = [
     each.value.id,
-    var.run_hours,
-    var.run_hours_mode,
-    filesha256("${path.module}/shutdown-timer.sh"),
+    jsonencode(var.access_keys),
+    filesha256("${path.module}/access-keys.sh"),
   ]
 
   connection {
@@ -126,8 +127,7 @@ resource "terraform_data" "shutdown_timer" {
     timeout     = "5m"
   }
 
-  # access_keys must read the old shutdown time before this moves it.
-  depends_on = [terraform_data.outline_install, terraform_data.access_keys]
+  depends_on = [terraform_data.outline_install, terraform_data.shutdown_timer]
 
   # Open port 22 before connecting.
   provisioner "local-exec" {
@@ -135,15 +135,14 @@ resource "terraform_data" "shutdown_timer" {
   }
 
   provisioner "file" {
-    source      = "${path.module}/shutdown-timer.sh"
-    destination = "/tmp/shutdown-timer.sh"
+    source      = "${path.module}/access-keys.sh"
+    destination = "/tmp/access-keys.sh"
   }
 
   provisioner "remote-exec" {
     inline = [
-      # A VM created in this apply already got run_hours from its boot script,
-      # so "append" would double it; use "reset" for new VMs.
-      "bash /tmp/shutdown-timer.sh ${timecmp(each.value.creation_timestamp, plantimestamp()) >= 0 ? "reset" : var.run_hours_mode} ${var.run_hours}",
+      "sudo install -m 0755 /tmp/access-keys.sh /usr/local/sbin/outline-access-keys",
+      "sudo /usr/local/sbin/outline-access-keys sync ${base64encode(jsonencode(var.access_keys))}",
     ]
   }
 }
@@ -156,11 +155,18 @@ resource "terraform_data" "ssh_close" {
 
   triggers_replace = [
     sort([for run in terraform_data.outline_install : run.id]),
-    sort([for run in terraform_data.access_keys : run.id]),
     sort([for run in terraform_data.shutdown_timer : run.id]),
+    sort([for run in terraform_data.access_keys : run.id]),
   ]
 
   provisioner "local-exec" {
     command = "${local.ssh_rule_cmd} --disabled"
+  }
+}
+
+check "access_keys_need_outline" {
+  assert {
+    condition     = var.run_postscript || length(var.access_keys) == 0
+    error_message = "access_keys is ignored because run_postscript = false (Outline is not installed by Terraform)."
   }
 }

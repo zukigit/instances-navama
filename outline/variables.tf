@@ -172,7 +172,7 @@ variable "close_ssh_after_install" {
 }
 
 variable "run_hours" {
-  description = "Stop each VM after it has been running this many hours (timer restarts every time it starts). 0 = no limit."
+  description = "Length of a run period in hours: the VM stops at the period end, and access key usage goes to 0 at each period start. A reboot keeps the period. 0 = no limit. See MODES.md."
   type        = number
   default     = 0
 
@@ -183,7 +183,7 @@ variable "run_hours" {
 }
 
 variable "run_hours_mode" {
-  description = "How a run_hours change applies to a running VM: \"reset\" = shut down run_hours from now; \"append\" = add run_hours to the time currently left."
+  description = "How a run_hours change applies to a running VM: \"reset\" = new period now (usage 0 now); \"append\" = end run_hours after the current end (usage 0 at the current end). Changing only the mode does nothing."
   type        = string
   default     = "reset"
 
@@ -195,10 +195,10 @@ variable "run_hours_mode" {
 
 variable "access_keys" {
   description = <<-EOT
-    Outline access keys to create, by name, with an optional data limit in GB
-    (omit or null for no limit). Empty (default) = Terraform does not touch keys.
-    run_hours_mode = "reset" deletes all keys and creates these; "append" keeps
-    them and resets their data usage to 0 at the old shutdown time.
+    Outline access keys, by name, with an optional data limit in GB (omit or
+    null for no limit). Synced by name in any mode: existing keys keep their
+    link and usage, new names get new keys, unlisted keys are deleted. Usage
+    goes to 0 at each run period start. Empty (default) = keys not managed.
   EOT
   type = map(object({
     data_limit_gb = optional(number)

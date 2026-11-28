@@ -26,19 +26,21 @@ firewall_name = "allow-outline"
 # Close port 22 (disable the SSH firewall rule) after the install. Needs gcloud.
 # close_ssh_after_install = true
 
-# Stop each VM after this many hours of running (0 = no limit). Restarts on next apply.
-# Keep the value you want here; a plain `terraform apply` resets it to this.
+# Run period: stop each VM after this many hours (0 = no limit). A plain
+# `terraform apply` later starts it again in a new period. Keep the values you
+# want here; a plain `terraform apply` uses these (see MODES.md).
 # e.g. 12 = 12 hours, 720 = 30 days
 run_hours = 0
-# How a run_hours change applies to a running VM: "reset" (from now) or "append" (add to time left).
+# How a run_hours change applies to a running VM:
+#   "reset"  = new period now (access key usage 0 now)
+#   "append" = add to the current period (usage 0 at its old end)
 # run_hours_mode = "reset"
 
 # Outline access keys (VPN keys), printed as ss:// links in the apply output.
 # data_limit_gb: limit per key (decimal GB, like Outline Manager); omit for no limit.
-# Both modes reset data usage to 0 and keep each key's ss:// link (same password):
-# reset mode does it now, append mode at the old shutdown time. In reset mode,
-# keys not listed here (including ones made in Manager) are deleted.
-# Leave empty to manage keys yourself in Outline Manager.
+# Keys are matched by name; keys not listed here (including ones made in
+# Manager) are deleted. Usage goes to 0 at the start of each run period, and
+# links stay the same. Leave empty to manage keys yourself in Outline Manager.
 # access_keys = {
 #   alice = { data_limit_gb = 200 }
 #   bob   = {}
