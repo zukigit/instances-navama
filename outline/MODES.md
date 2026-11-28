@@ -25,7 +25,7 @@ The period's end is saved on the VM in `/var/lib/outline-period/end`. Both the t
 
 **SSH uses the VM's current IP.** Right after Terraform starts a stopped VM, its state can show an empty external IP, so `data.google_compute_instance.current` reads the VM again during the apply. The SSH steps and `terraform output` use that IP.
 
-**Only one key operation runs at a time** on the VM, enforced by a lock: the usage reset at boot, a missed reset timer, the timer step's reset and the keys sync. So they never change the same keys at once.
+**Only one key operation runs at a time** on the VM, enforced by a lock: the usage reset at boot, a missed reset timer, the timer step's reset and the keys sync. So they never change the same keys at once. The keys sync also waits for the boot script to finish, so the links it prints already have the new IP after a restart.
 
 **`run_hours_mode` is not a trigger.** It only says *how* a `run_hours` change is applied, so switching the mode alone does nothing. To act again with the same values, use `-replace='terraform_data.shutdown_timer["<region>"]'`.
 
@@ -87,7 +87,7 @@ It prints every key's link. With `access_keys = {}` (the default), Terraform doe
 
 **How a usage reset works:** Outline counts usage per key ID and has no "reset" call. So each key is deleted and created again with the same name, password, port and limit. The link holds only the password, host and port, so it doesn't change, and the new ID starts at 0. Every key on the server is reset, including keys made in Manager, but with `access_keys` set those are deleted anyway.
 
-**If recreating a key fails**, the reset tries to bring it back from its backup (same link) a few times, then carries on with the other keys. If it still can't, the reset stops there, so at most one key is missing and the rest are left as they were. The backup (with the key passwords) stays in `/var/lib/outline-access-keys/` until the key is back. The key comes back with the same link either when you run `sudo outline-access-keys restore` on the VM, or at the next keys sync (any `apply` that changes `access_keys`). After a successful sync the backups are deleted, so a key you removed from `access_keys` can't come back later.
+**If recreating a key fails**, the reset tries to bring it back from its backup (same link) a few times, then carries on with the other keys. If it still can't, the reset stops there, so at most one key is missing and the rest are left as they were. The backup (with the key passwords) stays in `/var/lib/outline-access-keys/` until the key is back. The key comes back with the same link at the next usage reset (each reset first restores keys an earlier one left missing), at the next keys sync (any `apply` that changes `access_keys`), or when you run `sudo outline-access-keys restore` on the VM. After a successful sync the backups are deleted, so a key you removed from `access_keys` can't come back later.
 
 **One reset at a time is enough:** a reset within 5 minutes of the last one is skipped. A new period at boot and a missed reset timer can both fire right after a boot, and this gives users one disconnect instead of two.
 
@@ -133,6 +133,7 @@ The timer step tells these apart by comparing the VM's boot time with the plan t
 - **A new VM** always starts a fresh period with fresh keys, whatever the mode.
 - **During a usage reset**, connected users drop for a moment, keys are briefly missing, Manager shows new key IDs, and Manager loses the earlier usage history.
 - **Outline counts usage over a rolling 30 days.** Without a reset, usage older than 30 days drops off on its own.
+- **A failed timer step in `append` mode:** if the step fails after it has already moved the end (for example, the SSH connection drops at the very end), Terraform re-runs it on the next apply and appends `run_hours` again. Check the end on the VM (see [Checking the state](#checking-the-state-on-a-vm)) before re-applying after such a failure.
 - **`sudo shutdown -c` on the VM** cancels the shutdown but not the saved end. A VM that keeps running past its end gets no new period, and no usage reset, until the next `apply` that changes `run_hours` or uses `-replace`. A later boot then starts a new period, because the end has passed.
 - **Port 22:** each SSH step opens the `<firewall_name>-ssh` rule first, and `ssh_close` closes it at the end. If a step fails, the rule stays open until the next successful apply. If `default-allow-ssh` is enabled, it keeps port 22 open regardless.
 

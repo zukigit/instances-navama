@@ -16,7 +16,8 @@
 #       Remove all pending reset-usage timers.
 #   outline-access-keys restore
 #       Create again any key from the last reset-usage backup that is missing
-#       (same password and port, so the same link). For a failed reset.
+#       (same password and port, so the same link). For a failed reset; every
+#       reset-usage also does this first.
 #
 # Only one command runs at a time (a lock), so a usage reset at boot, a missed
 # reset timer and Terraform's sync can't change the same keys at once.
@@ -166,6 +167,8 @@ cmd_sync() {
 cmd_reset_usage() {
   mkdir -p "$STATE_DIR"
   chmod 700 "$STATE_DIR"
+  # First bring back keys an earlier failed reset left missing (same links).
+  if [ -n "$(latest_backup)" ]; then cmd_restore || true; fi
   # A new period at boot and a missed reset timer can both fire right after a
   # boot; one reset is enough (and one disconnect).
   local last
@@ -272,6 +275,19 @@ EOF
   systemctl enable --now "$UNIT_PREFIX$t.timer" >/dev/null 2>&1
   echo "access-keys: data usage resets to 0 at $(date -d "@$t")"
 }
+
+# sync prints the links, so let the boot script finish first: it may still be
+# telling Outline a new IP (it waits for Outline's containers). Done before
+# taking the lock, because the boot script's own usage reset needs it.
+# Waits up to 10 minutes.
+if [ "${1:-}" = sync ]; then
+  for _ in $(seq 1 120); do
+    state=$(systemctl show -p ActiveState --value google-startup-scripts.service 2>/dev/null || true)
+    [ "$state" = activating ] || break
+    [ -n "${waited:-}" ] || { echo "access-keys: waiting for the boot script to finish"; waited=1; }
+    sleep 5
+  done
+fi
 
 # One command at a time (waits up to 10 minutes for another to finish).
 exec 9>"$LOCK_FILE"
