@@ -27,8 +27,9 @@ firewall_name = "allow-outline"
 # close_ssh_after_install = true
 
 # Run period: stop each VM after this many hours (0 = no limit). A plain
-# `terraform apply` later starts it again in a new period. Keep the values you
-# want here; a plain `terraform apply` uses these (see MODES.md).
+# `terraform apply` starts a stopped VM: it continues the period if its end is
+# still ahead, or starts a new one if it has passed. Keep the values you want
+# here; a plain `terraform apply` uses these (see MODES.md).
 # e.g. 12 = 12 hours, 720 = 30 days
 run_hours = 0
 # How a run_hours change applies to a running VM:
