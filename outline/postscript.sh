@@ -26,12 +26,20 @@ fi
 # No interactive prompts from apt.
 export DEBIAN_FRONTEND=noninteractive
 
-# Add Docker's official GPG key:
+# Private download folder (not shared /tmp): what's in it runs or is trusted as root.
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+# Add Docker's official GPG key. It signs every Docker package, so it is
+# checked against a known SHA-256 (key fingerprint 9DC8 5822 9FC7 DD38 854A
+# E2D8 8D81 803C 0EBF CD88) before apt trusts it.
+DOCKER_KEY_SHA256=1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570
 sudo -E apt-get update
 sudo -E apt-get install -y ca-certificates curl
+curl -fsSL https://download.docker.com/linux/debian/gpg -o "$WORK/docker.asc"
+echo "${DOCKER_KEY_SHA256}  $WORK/docker.asc" | sha256sum -c -
 sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
+sudo install -m 0644 "$WORK/docker.asc" /etc/apt/keyrings/docker.asc
 
 # Add the repository to Apt sources:
 sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
@@ -53,9 +61,6 @@ sudo systemctl restart docker
 # The installer is pinned to a commit and checked against its SHA-256, so a
 # change upstream can't run as root here. (The server image itself is still
 # kept up to date by the installer's watchtower.)
-# Download into a private folder (not shared /tmp), since it runs as root.
-WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
 curl -fsSL "https://raw.githubusercontent.com/Jigsaw-Code/outline-server/${INSTALLER_COMMIT}/src/server_manager/install_scripts/install_server.sh" \
   -o "$WORK/install_server.sh"
 echo "${INSTALLER_SHA256}  $WORK/install_server.sh" | sha256sum -c -

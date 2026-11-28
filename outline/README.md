@@ -215,6 +215,7 @@ COMMIT=$(git ls-remote https://github.com/Jigsaw-Code/outline-server "refs/tags/
   # outline_installer_commit = "$COMMIT", outline_installer_sha256 = <the hash above>
   ```
   This only affects new VMs (the installer runs once per VM).
+- **Pinned Docker key:** `postscript.sh` also checks Docker's apt signing key (fingerprint `9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88`) against a SHA-256 before trusting it. If Docker ever re-publishes the key file, the install on a new VM stops at that check. Confirm the new file still has that fingerprint (`curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --show-keys`), then update `DOCKER_KEY_SHA256` in `postscript.sh` to its `sha256sum`.
 - **Cost:** the free e2-micro only applies in `us-west1`, `us-central1` and `us-east1`. Instances in any other region are billed.
 - **External IPs are temporary.** An instance's IP can change when it is stopped and started, so any Outline access keys that use that IP stop working. Reserve a static address if you need it to stay the same.
 - **State:** Terraform keeps its state in a local `terraform.tfstate` file, which is not committed to git. Keep that file somewhere safe; without it, Terraform can no longer manage the instances it created.

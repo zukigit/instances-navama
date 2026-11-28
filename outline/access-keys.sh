@@ -249,6 +249,7 @@ cmd_restore() {
 
 cmd_schedule_reset() {
   local t=${1:?epoch required}
+  [[ $t =~ ^[0-9]{9,11}$ ]] || { echo "access-keys: bad time '$t' (want epoch seconds)" >&2; exit 2; }
   remove_reset_units past
   cat >"$UNIT_DIR/$UNIT_PREFIX$t.service" <<EOF
 [Unit]
