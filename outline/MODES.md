@@ -17,10 +17,15 @@ The period's end is saved on the VM in `/var/lib/outline-period/end`. Both the t
 | `terraform_data.outline_install` (`postscript.sh`) | VM, over SSH | VM is new, or `postscript.sh` changed | Installs Docker and Outline |
 | `terraform_data.shutdown_timer` (`shutdown-timer.sh`) | VM, over SSH | VM is new, or `run_hours` or `shutdown-timer.sh` changed | Sets the period: its end, plus the usage resets |
 | `terraform_data.access_keys` (`access-keys.sh sync`) | VM, over SSH | Only if `access_keys` is set; VM is new, or `access_keys` or `access-keys.sh` changed | Creates, deletes and sets limits on keys, and prints the links. **Never changes usage** |
+| `terraform_data.access_keys_off` | VM, over SSH | Only if `access_keys` is empty: once per VM, and again whenever `access_keys` is emptied | Cancels usage resets left by earlier appends |
 | `terraform_data.ssh_close` | Your PC (`gcloud`) | Any SSH step above ran | Closes port 22 |
 | `outline-usage-reset-<time>.timer` | VM, systemd | At `<time>`, or at the next boot if the VM was off then | Resets usage to 0 (set up by `append`) |
 
-**Order in one apply:** VM → install → period → keys → close SSH.
+**Order in one apply:** VM → install → period → keys (or keys off) → close SSH.
+
+**SSH uses the VM's current IP.** Right after Terraform starts a stopped VM, its state can show an empty external IP, so `data.google_compute_instance.current` reads the VM again during the apply. The SSH steps and `terraform output` use that IP.
+
+**Only one key operation runs at a time** on the VM, enforced by a lock: the usage reset at boot, a missed reset timer, the timer step's reset and the keys sync. So they never change the same keys at once.
 
 **`run_hours_mode` is not a trigger.** It only says *how* a `run_hours` change is applied, so switching the mode alone does nothing. To act again with the same values, use `-replace='terraform_data.shutdown_timer["<region>"]'`.
 
@@ -77,9 +82,11 @@ The keys step runs when `access_keys` changes, or on a new VM. It runs the same 
 | Name in `access_keys`, no key | New key, printed as `NEW link` |
 | Key not in `access_keys`, including keys made in Manager, or a duplicate name | Deleted |
 
-It prints every key's link. With `access_keys = {}` (the default), Terraform doesn't touch keys, and no usage resets happen at all.
+It prints every key's link. With `access_keys = {}` (the default), Terraform doesn't touch keys and no usage resets happen: `access_keys_off` cancels any left over from earlier appends.
 
 **How a usage reset works:** Outline counts usage per key ID and has no "reset" call. So each key is deleted and created again with the same name, password, port and limit. The link holds only the password, host and port, so it doesn't change, and the new ID starts at 0. Every key on the server is reset, including keys made in Manager, but with `access_keys` set those are deleted anyway.
+
+**If recreating a key fails** (Outline keeps refusing it), the reset stops right there, so at most one key is missing and the rest are left as they were. A backup with every key's password is kept in `/var/lib/outline-access-keys/`. Run `sudo outline-access-keys restore` on the VM to create the missing key again with the same link.
 
 ## Boot
 
@@ -113,7 +120,7 @@ The timer step tells these apart by comparing the VM's boot time with the plan t
 | Extend before the period ends | `append` mode, then change `run_hours` or `-replace` the timer step | See [`append` mode](#append-mode) |
 | Add a user, change a limit, or remove a user | Edit `access_keys`, then `apply` (any mode) | Only that key changes; nobody's usage resets |
 | Give one user a new link (leaked key) | Rename their entry in `access_keys`, then `apply` | Old key deleted, new key and link |
-| Stop managing keys | `access_keys = {}` | Keys untouched from now on; no more usage resets |
+| Stop managing keys | `access_keys = {}`, then `apply` | Keys stay on the server, untouched from now on; pending usage resets are cancelled |
 | No time limit | `run_hours = 0` | Shutdown cancelled; usage only resets as per the mode at that apply |
 
 ## Things that can surprise you
@@ -134,4 +141,5 @@ sudo cat /run/systemd/shutdown/scheduled             # pending shutdown (USEC = 
 systemctl list-timers 'outline-usage-reset-*'        # pending usage resets
 sudo journalctl -u google-startup-scripts -b         # boot script log (period, IP)
 sudo journalctl -u 'outline-usage-reset-*'           # usage reset log
+sudo outline-access-keys restore                     # after a failed usage reset
 ```

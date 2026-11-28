@@ -14,6 +14,12 @@
 #       Run reset-usage at <epoch> (a systemd timer that survives reboots).
 #   outline-access-keys cancel-resets
 #       Remove all pending reset-usage timers.
+#   outline-access-keys restore
+#       Create again any key from the last reset-usage backup that is missing
+#       (same password and port, so the same link). For a failed reset.
+#
+# Only one command runs at a time (a lock), so a usage reset at boot, a missed
+# reset timer and Terraform's sync can't change the same keys at once.
 #
 # How reset-usage works: Outline counts usage per key ID and has no "reset
 # usage" call, so each key is deleted and created again with the same name,
@@ -24,6 +30,7 @@ set -euo pipefail
 ACCESS=/opt/outline/access.txt
 UNIT_DIR="${UNIT_DIR:-/etc/systemd/system}"
 STATE_DIR="${STATE_DIR:-/var/lib/outline-access-keys}"
+LOCK_FILE="${LOCK_FILE:-/run/outline-access-keys.lock}"
 UNIT_PREFIX=outline-usage-reset-
 SELF=/usr/local/sbin/outline-access-keys
 BASE=""
@@ -103,8 +110,9 @@ cmd_sync() {
   while read -r key; do
     id=$(jq -r .id <<<"$key")
     name=$(jq -r .name <<<"$key")
-    api DELETE "/access-keys/$id" >/dev/null
-    echo "access-keys: deleted '$name' (key $id: not in access_keys, or a duplicate name)"
+    if api DELETE "/access-keys/$id" >/dev/null; then
+      echo "access-keys: deleted '$name' (key $id: not in access_keys, or a duplicate name)"
+    fi
   done < <(jq -c --argjson want "$keys_json" '
     .accessKeys | group_by(.name)
     | map(if (.[0].name | in($want)) then .[1:] else . end) | add // [] | .[]' <<<"$current")
@@ -153,15 +161,48 @@ cmd_reset_usage() {
     name=$(jq -r .name <<<"$key")
     body=$(jq -c '{name, password, port, method}
       + (if .dataLimit == null then {} else {limit: .dataLimit} end)' <<<"$key")
-    api DELETE "/access-keys/$id" >/dev/null
+    if ! api DELETE "/access-keys/$id" >/dev/null; then
+      echo "access-keys: skipped '$name' (key $id is already gone)"
+      continue
+    fi
     if resp=$(create_key "$body"); then
       echo "access-keys: usage reset to 0 for '$name' (key $id -> $(jq -r .id <<<"$resp"), same link)"
     else
-      echo "access-keys: FAILED to recreate '$name' (key $id); see $backup" >&2
+      echo "access-keys: FAILED to recreate '$name' (key $id); stopping, other keys left as they are." >&2
+      echo "access-keys: run 'sudo outline-access-keys restore' to bring it back (same link)" >&2
       failed=1
+      break
     fi
   done < <(jq -c '.accessKeys[]' <<<"$keys")
 
+  if [ "$failed" = 0 ]; then rm -f "$backup"; fi
+  return "$failed"
+}
+
+cmd_restore() {
+  local backup
+  backup=$(ls -1t "$STATE_DIR"/before-reset-*.json 2>/dev/null | head -n1 || true)
+  if [ -z "$backup" ]; then
+    echo "access-keys: no backup found in $STATE_DIR (nothing to restore)"
+    return 0
+  fi
+  init_api
+  local current key name body resp failed=0
+  current=$(api GET /access-keys)
+  echo "access-keys: restoring missing keys from $backup"
+  while read -r key; do
+    name=$(jq -r .name <<<"$key")
+    body=$(jq -c '{name, password, port, method}
+      + (if .dataLimit == null then {} else {limit: .dataLimit} end)' <<<"$key")
+    if resp=$(create_key "$body"); then
+      echo "access-keys: restored '$name' (key $(jq -r .id <<<"$resp"), same link)"
+    else
+      echo "access-keys: FAILED to restore '$name'" >&2
+      failed=1
+    fi
+  done < <(jq -c --argjson cur "$current" '
+    ($cur.accessKeys | map(.password)) as $have
+    | .accessKeys[] | select(.password as $p | $have | index($p) | not)' "$backup")
   if [ "$failed" = 0 ]; then rm -f "$backup"; fi
   return "$failed"
 }
@@ -195,13 +236,18 @@ EOF
   echo "access-keys: data usage resets to 0 at $(date -d "@$t")"
 }
 
+# One command at a time (waits up to 10 minutes for another to finish).
+exec 9>"$LOCK_FILE"
+flock -w 600 9 || { echo "access-keys: another key operation is still running" >&2; exit 1; }
+
 case "${1:-}" in
   sync) cmd_sync "${2:-}" ;;
   reset-usage) cmd_reset_usage ;;
   schedule-reset) cmd_schedule_reset "${2:-}" ;;
   cancel-resets) remove_reset_units all ;;
+  restore) cmd_restore ;;
   *)
-    echo "usage: $0 sync <keys_json_base64> | reset-usage | schedule-reset <epoch> | cancel-resets" >&2
+    echo "usage: $0 sync <keys_json_base64> | reset-usage | schedule-reset <epoch> | cancel-resets | restore" >&2
     exit 2
     ;;
 esac

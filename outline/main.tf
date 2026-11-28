@@ -93,3 +93,24 @@ resource "google_compute_instance" "outline" {
     type = "ANY_RESERVATION"
   }
 }
+
+# The instance's state can show an empty external IP right after Terraform
+# starts a stopped VM (the IP is assigned on start). This reads the VM again
+# after any change to it in the same apply, so SSH steps and outputs get the
+# current IP.
+data "google_compute_instance" "current" {
+  for_each  = google_compute_instance.outline
+  self_link = each.value.self_link
+
+  depends_on = [google_compute_instance.outline]
+}
+
+locals {
+  external_ip = {
+    for region, vm in google_compute_instance.outline : region => coalesce(
+      try(data.google_compute_instance.current[region].network_interface[0].access_config[0].nat_ip, ""),
+      vm.network_interface[0].access_config[0].nat_ip,
+      "none",
+    )
+  }
+}

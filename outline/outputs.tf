@@ -5,7 +5,7 @@ output "instances" {
       name        = vm.name
       zone        = vm.zone
       internal_ip = vm.network_interface[0].network_ip
-      external_ip = vm.network_interface[0].access_config[0].nat_ip
+      external_ip = local.external_ip[region]
     }
   }
 }

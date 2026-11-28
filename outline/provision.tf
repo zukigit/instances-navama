@@ -28,7 +28,7 @@ resource "terraform_data" "outline_install" {
 
   connection {
     type        = "ssh"
-    host        = each.value.network_interface[0].access_config[0].nat_ip
+    host        = local.external_ip[each.key]
     user        = var.ssh_user
     private_key = file(var.ssh_private_key_path)
     timeout     = "5m"
@@ -70,7 +70,7 @@ resource "terraform_data" "shutdown_timer" {
 
   connection {
     type        = "ssh"
-    host        = each.value.network_interface[0].access_config[0].nat_ip
+    host        = local.external_ip[each.key]
     user        = var.ssh_user
     private_key = file(var.ssh_private_key_path)
     timeout     = "5m"
@@ -121,7 +121,7 @@ resource "terraform_data" "access_keys" {
 
   connection {
     type        = "ssh"
-    host        = each.value.network_interface[0].access_config[0].nat_ip
+    host        = local.external_ip[each.key]
     user        = var.ssh_user
     private_key = file(var.ssh_private_key_path)
     timeout     = "5m"
@@ -147,6 +147,37 @@ resource "terraform_data" "access_keys" {
   }
 }
 
+# Step 3b: when access_keys is empty (keys not managed), cancel any usage
+# resets that earlier appends left on the VM, so they don't reset keys you now
+# manage yourself. Runs once per VM, and again whenever access_keys is emptied.
+resource "terraform_data" "access_keys_off" {
+  for_each = local.manage_keys ? {} : google_compute_instance.outline
+
+  triggers_replace = [each.value.id]
+
+  connection {
+    type        = "ssh"
+    host        = local.external_ip[each.key]
+    user        = var.ssh_user
+    private_key = file(var.ssh_private_key_path)
+    timeout     = "5m"
+  }
+
+  depends_on = [terraform_data.outline_install, terraform_data.shutdown_timer]
+
+  # Open port 22 before connecting.
+  provisioner "local-exec" {
+    command = local.ssh_open_cmd
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "if [ -x /usr/local/sbin/outline-access-keys ]; then sudo /usr/local/sbin/outline-access-keys cancel-resets; fi",
+      "echo 'access_keys is empty: keys are not managed by Terraform, and no usage resets are pending'",
+    ]
+  }
+}
+
 # Step 4: once all SSH steps have finished, turn the SSH rule off (port 22 closed).
 # Runs whenever any SSH step ran. Not reached if one fails, so SSH stays open
 # for debugging.
@@ -157,6 +188,7 @@ resource "terraform_data" "ssh_close" {
     sort([for run in terraform_data.outline_install : run.id]),
     sort([for run in terraform_data.shutdown_timer : run.id]),
     sort([for run in terraform_data.access_keys : run.id]),
+    sort([for run in terraform_data.access_keys_off : run.id]),
   ]
 
   provisioner "local-exec" {
