@@ -10,6 +10,19 @@ KEYS_PORT="${2:-9443}"
 INSTALLER_COMMIT="${3:?installer commit required}"
 INSTALLER_SHA256="${4:?installer sha256 required}"
 
+# Install once per VM. Outline's installer is not safe to run again on a live
+# server: it makes a new API secret and certificate (Manager must re-add the
+# server) and adds a key. Replace the VM to reinstall.
+if sudo test -s /opt/outline/access.txt &&
+  sudo docker ps --format '{{.Names}}' 2>/dev/null | grep -qx shadowbox; then
+  echo "Outline is already installed and running on this VM; skipping the install."
+  echo "(To reinstall, replace the VM: terraform apply -replace='google_compute_instance.outline[\"<region>\"]')"
+  echo
+  echo "===== Outline Manager config (/opt/outline/access.txt) ====="
+  sudo cat /opt/outline/access.txt
+  exit 0
+fi
+
 # No interactive prompts from apt.
 export DEBIAN_FRONTEND=noninteractive
 

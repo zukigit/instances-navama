@@ -23,10 +23,11 @@ locals {
 resource "terraform_data" "outline_install" {
   for_each = var.run_postscript ? google_compute_instance.outline : {}
 
-  # Re-run when the VM is replaced or the script changes.
+  # Once per VM: Outline's installer is not safe to run again on a live server
+  # (new API secret and certificate, an extra key). postscript.sh also skips
+  # the install if Outline is already running. Replace the VM to reinstall.
   triggers_replace = [
     each.value.id,
-    filesha256("${path.module}/postscript.sh"),
   ]
 
   connection {

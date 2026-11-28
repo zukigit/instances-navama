@@ -14,7 +14,7 @@ The period's end is saved on the VM in `/var/lib/outline-period/end`. Both the t
 |---|---|---|---|
 | `google_compute_instance.outline` | GCP | Created once per region; `desired_status = "RUNNING"` makes every `apply` start a stopped VM | Metadata changes, such as the boot script, update the VM in place |
 | Boot script (`startup.sh.tftpl`) | VM, as root | **Every boot**, however the VM was started | Continues the period or starts a new one; updates Outline's IP |
-| `terraform_data.outline_install` (`postscript.sh`) | VM, over SSH | VM is new, or `postscript.sh` changed | Installs Docker and Outline |
+| `terraform_data.outline_install` (`postscript.sh`) | VM, over SSH | VM is new (once per VM; skipped if Outline is already running) | Installs Docker and Outline. The installer also creates one unnamed key, which the keys sync deletes |
 | `terraform_data.shutdown_timer` (`shutdown-timer.sh`) | VM, over SSH | VM is new, or `run_hours` or `shutdown-timer.sh` changed | Sets the period: its end, plus the usage resets |
 | `terraform_data.access_keys` (`access-keys.sh sync`) | VM, over SSH | Only if `access_keys` is set; VM is new, or `access_keys` or `access-keys.sh` changed | Creates, deletes and sets limits on keys, and prints the links. **Never changes usage** |
 | `terraform_data.access_keys_off` | VM, over SSH | Only if `access_keys` is empty: once per VM, and again whenever `access_keys` is emptied | Cancels usage resets left by earlier appends |
@@ -129,7 +129,7 @@ The timer step tells these apart by comparing the VM's boot time with the plan t
 ## Things that can surprise you
 
 - **A plain `apply` uses `terraform.tfvars`.** If the last apply used `-var='run_hours=24'` and `terraform.tfvars` says `720`, the next plain apply sees `run_hours` change back and applies it in the mode from `terraform.tfvars`. In `reset` mode that resets everyone's usage now. Keep `run_hours` and `run_hours_mode` in `terraform.tfvars`.
-- **Editing `shutdown-timer.sh` re-runs the timer step** in the current mode: `reset` resets usage now, and `append` adds `run_hours` again. Editing `access-keys.sh` only re-syncs the keys, which is harmless. Editing `postscript.sh` runs the Outline install again.
+- **Editing `shutdown-timer.sh` re-runs the timer step** in the current mode: `reset` resets usage now, and `append` adds `run_hours` again. Editing `access-keys.sh` only re-syncs the keys, which is harmless. Editing `postscript.sh` doesn't affect existing VMs; replace a VM to reinstall it.
 - **A new VM** always starts a fresh period with fresh keys, whatever the mode.
 - **During a usage reset**, connected users drop for a moment, keys are briefly missing, Manager shows new key IDs, and Manager loses the earlier usage history.
 - **Outline counts usage over a rolling 30 days.** Without a reset, usage older than 30 days drops off on its own.
