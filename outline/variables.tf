@@ -57,15 +57,11 @@ variable "service_account_email" {
 }
 
 variable "scopes" {
-  description = "OAuth scopes for the service account."
+  description = "OAuth scopes for the service account. Only logging and monitoring by default: nothing on the VM needs more, and Outline (host network) could reach the token."
   type        = list(string)
   default = [
-    "https://www.googleapis.com/auth/devstorage.read_only",
     "https://www.googleapis.com/auth/logging.write",
     "https://www.googleapis.com/auth/monitoring.write",
-    "https://www.googleapis.com/auth/service.management.readonly",
-    "https://www.googleapis.com/auth/servicecontrol",
-    "https://www.googleapis.com/auth/trace.append",
   ]
 }
 
@@ -133,6 +129,12 @@ variable "ssh_user" {
   description = "Linux user Terraform logs in as to run postscript.sh."
   type        = string
   default     = "outline"
+
+  # Used in shell commands and paths on the VM.
+  validation {
+    condition     = can(regex("^[a-z_][a-z0-9_-]{0,31}$", var.ssh_user))
+    error_message = "ssh_user must be a plain Linux user name (lowercase letters, digits, _ and -)."
+  }
 }
 
 variable "ssh_public_key_path" {
@@ -208,5 +210,27 @@ variable "access_keys" {
   validation {
     condition     = alltrue([for k in values(var.access_keys) : coalesce(k.data_limit_gb, 0) >= 0])
     error_message = "data_limit_gb must be 0 or more."
+  }
+}
+
+variable "outline_installer_commit" {
+  description = "Commit of Jigsaw-Code/outline-server whose install_server.sh is used (default: tag server-v1.12.3). Update together with outline_installer_sha256."
+  type        = string
+  default     = "067d0d47aedac94a3888a127fa6c65f2f53b9987"
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{40}$", var.outline_installer_commit))
+    error_message = "outline_installer_commit must be a full 40-character commit SHA."
+  }
+}
+
+variable "outline_installer_sha256" {
+  description = "SHA-256 of install_server.sh at outline_installer_commit; the install stops if the download doesn't match."
+  type        = string
+  default     = "0144d73391087b1cab6cdf4a353c73b7c0f4c0baada81b08bf2eb89d5b50c16d"
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{64}$", var.outline_installer_sha256))
+    error_message = "outline_installer_sha256 must be a 64-character hex SHA-256."
   }
 }

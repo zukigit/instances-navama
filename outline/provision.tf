@@ -4,6 +4,9 @@
 # These live in terraform_data (not inside the instance) so a failed run only
 # marks that step for a re-run; the VM itself is not destroyed.
 #
+# Scripts are uploaded to the SSH user's home, not /tmp: root runs them, and
+# other users can't swap a file there before sudo runs it.
+#
 # Port 22: every step that connects over SSH first turns the SSH firewall rule
 # on itself (so it can never be skipped), and ssh_close turns it off once all
 # SSH steps in the apply have finished.
@@ -41,12 +44,12 @@ resource "terraform_data" "outline_install" {
 
   provisioner "file" {
     source      = "${path.module}/postscript.sh"
-    destination = "/tmp/postscript.sh"
+    destination = "/home/${var.ssh_user}/postscript.sh"
   }
 
   provisioner "remote-exec" {
     inline = [
-      "bash /tmp/postscript.sh ${var.outline_api_port} ${var.outline_keys_port}",
+      "bash /home/${var.ssh_user}/postscript.sh ${var.outline_api_port} ${var.outline_keys_port} ${var.outline_installer_commit} ${var.outline_installer_sha256}",
     ]
   }
 }
@@ -85,21 +88,21 @@ resource "terraform_data" "shutdown_timer" {
 
   provisioner "file" {
     source      = "${path.module}/shutdown-timer.sh"
-    destination = "/tmp/shutdown-timer.sh"
+    destination = "/home/${var.ssh_user}/shutdown-timer.sh"
   }
 
   # The usage resets use the access keys script.
   provisioner "file" {
     source      = "${path.module}/access-keys.sh"
-    destination = "/tmp/access-keys.sh"
+    destination = "/home/${var.ssh_user}/access-keys.sh"
   }
 
   provisioner "remote-exec" {
     inline = [
-      "sudo install -m 0755 /tmp/access-keys.sh /usr/local/sbin/outline-access-keys",
+      "sudo install -m 0755 /home/${var.ssh_user}/access-keys.sh /usr/local/sbin/outline-access-keys",
       # plantimestamp() lets the script tell whether this apply started the VM
       # (then a new period may already have been started by the boot script).
-      "bash /tmp/shutdown-timer.sh ${var.run_hours_mode} ${var.run_hours} ${local.manage_keys} ${plantimestamp()}",
+      "bash /home/${var.ssh_user}/shutdown-timer.sh ${var.run_hours_mode} ${var.run_hours} ${local.manage_keys} ${plantimestamp()}",
     ]
   }
 }
@@ -136,12 +139,12 @@ resource "terraform_data" "access_keys" {
 
   provisioner "file" {
     source      = "${path.module}/access-keys.sh"
-    destination = "/tmp/access-keys.sh"
+    destination = "/home/${var.ssh_user}/access-keys.sh"
   }
 
   provisioner "remote-exec" {
     inline = [
-      "sudo install -m 0755 /tmp/access-keys.sh /usr/local/sbin/outline-access-keys",
+      "sudo install -m 0755 /home/${var.ssh_user}/access-keys.sh /usr/local/sbin/outline-access-keys",
       "sudo /usr/local/sbin/outline-access-keys sync ${base64encode(jsonencode(var.access_keys))}",
     ]
   }

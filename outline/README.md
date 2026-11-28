@@ -154,7 +154,7 @@ At the end it prints the Outline Manager config (`apiUrl` and `certSha256`) from
 terraform apply 2>&1 | tee apply.log
 ```
 
-This needs an SSH key pair, `~/.ssh/id_ed25519` by default (`ssh-keygen -t ed25519` if you don't have one). If the install fails, the VM is kept and the next `apply` runs the script again. Editing `postscript.sh` also makes the next `apply` re-run it on every instance. Set `run_postscript = false` to skip the install.
+The installer comes from a pinned commit and is checked against its SHA-256 (see [Notes](#notes)). This needs an SSH key pair, `~/.ssh/id_ed25519` by default (`ssh-keygen -t ed25519` if you don't have one). If the install fails, the VM is kept and the next `apply` runs the script again. Editing `postscript.sh` also makes the next `apply` re-run it on every instance. Set `run_postscript = false` to skip the install.
 
 Port 22 is only open while the install runs. Before installing, Terraform turns the `<firewall_name>-ssh` rule on; once every instance has finished, it turns the rule off again with `gcloud`, so `gcloud` must be installed and signed in (`gcloud auth login`). If an install fails, the rule stays on so you can SSH in and debug; the next successful `apply` turns it off. Set `close_ssh_after_install = false` to keep port 22 open. This only closes port 22 if no other rule opens it: new GCP projects come with `default-allow-ssh` (TCP 22 from anywhere, all VMs). Disable it with `gcloud compute firewall-rules update default-allow-ssh --disabled`, but check that no other VM in the project needs it first. To open it by hand later:
 
@@ -177,7 +177,7 @@ gcloud compute firewall-rules update allow-outline-ssh --disabled      # close
 | `network` | `default` | VPC network for the firewall rule |
 | `subnetwork` | `default` | Subnet name, looked up in each region |
 | `service_account_email` | `null` (project's default compute SA) | Service account attached to the VMs |
-| `scopes` | gcloud default scopes | OAuth scopes for the service account |
+| `scopes` | logging and monitoring write only | OAuth scopes for the service account; see Notes |
 | `tag_name` | `outline-nw` | Network tag on the VMs; the firewall rule targets this tag |
 | `labels` | `{ managed-by = "terraform" }` | Instance labels |
 | `firewall_name` | `allow-outline` | Name of the firewall rule |
@@ -195,12 +195,24 @@ gcloud compute firewall-rules update allow-outline-ssh --disabled      # close
 | `ssh_source_ranges` | `["0.0.0.0/0"]` | Sources allowed to SSH in; narrow to your IP |
 | `outline_api_port` | `8443` | Outline management API port (TCP) |
 | `outline_keys_port` | `9443` | Outline access keys port (TCP and UDP) |
+| `outline_installer_commit` | commit of `server-v1.12.3` | outline-server commit whose `install_server.sh` is used |
+| `outline_installer_sha256` | SHA-256 of that file | The install stops if the downloaded installer doesn't match |
 
 You can override any of these with `-var` or in `terraform.tfvars`. Never commit `terraform.tfvars`; put shareable examples in `terraform.tfvars.example`.
 
 ## Notes
 
 - **Ports:** `outline_api_port` and `outline_keys_port` are used when Outline is installed, so they only take effect on a new VM. Changing them later does nothing to an existing server; replace the VM (`-replace='google_compute_instance.outline["<region>"]'`) to use new ports, which gives new keys and links. The firewall ports (`outline_tcp_ports`, `outline_udp_ports`) must include them; `plan` stops with an error if they don't.
+- **Service account scopes:** only `logging.write` and `monitoring.write` by default. The gcloud defaults also include read access to every Cloud Storage bucket in the project, and Outline runs with host networking, so it could read the VM's token. Nothing in this setup needs more. Changing `scopes` stops and restarts the VM once (`allow_stopping_for_update`).
+- **Pinned installer:** `postscript.sh` downloads Outline's `install_server.sh` from a fixed commit and checks its SHA-256, so a change upstream can't run as root on your VMs. The Outline server image itself (`shadowbox:stable`) is still updated automatically by the watchtower container the installer sets up. To move to a newer installer, pick a release at github.com/Jigsaw-Code/outline-server/releases, then set both values:
+  ```bash
+  TAG=server-v1.12.3   # the release you want
+  # the commit the tag points to (the "^{}" line, if the tag is annotated)
+COMMIT=$(git ls-remote https://github.com/Jigsaw-Code/outline-server "refs/tags/$TAG" "refs/tags/$TAG^{}" | sort -k2 -r | head -n1 | cut -f1)
+  curl -fsSL "https://raw.githubusercontent.com/Jigsaw-Code/outline-server/$COMMIT/src/server_manager/install_scripts/install_server.sh" | sha256sum
+  # outline_installer_commit = "$COMMIT", outline_installer_sha256 = <the hash above>
+  ```
+  This only affects new VMs (the installer runs once per VM).
 - **Cost:** the free e2-micro only applies in `us-west1`, `us-central1` and `us-east1`. Instances in any other region are billed.
 - **External IPs are temporary.** An instance's IP can change when it is stopped and started, so any Outline access keys that use that IP stop working. Reserve a static address if you need it to stay the same.
 - **State:** Terraform keeps its state in a local `terraform.tfstate` file, which is not committed to git. Keep that file somewhere safe; without it, Terraform can no longer manage the instances it created.
