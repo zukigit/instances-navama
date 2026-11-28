@@ -71,6 +71,9 @@ gb() { # bytes -> "N GB" (decimal, like Outline Manager)
   if [ -z "$1" ] || [ "$1" = null ]; then echo "no limit"; else echo "$(($1 / 1000000000)) GB"; fi
 }
 
+# Newest backup left by a failed reset-usage, if any.
+latest_backup() { ls -1t "$STATE_DIR"/before-reset-*.json 2>/dev/null | head -n1 || true; }
+
 # create_key <json body> -> prints the created key's JSON. Retries briefly.
 create_key() {
   local resp
@@ -119,7 +122,8 @@ cmd_sync() {
 
   echo
   echo "===== Outline access keys ====="
-  local entry limit old resp failed=0
+  local entry limit old prev resp failed=0 backups=()
+  mapfile -t backups < <(ls -1t "$STATE_DIR"/before-reset-*.json 2>/dev/null || true)
   while read -r entry; do
     name=$(jq -r .key <<<"$entry")
     limit=$(jq -c 'if .value.data_limit_gb == null then null
@@ -134,7 +138,18 @@ cmd_sync() {
         api PUT "/access-keys/$id/data-limit" -d "{\"limit\":$limit}" >/dev/null
       fi
       echo "$name ($(gb "$(jq -r '.bytes // empty' <<<"$limit")")): $(jq -r .accessUrl <<<"$old")"
-    elif resp=$(create_key "$(jq -c -n --arg n "$name" --argjson l "$limit" \
+      continue
+    fi
+    # Missing, but lost in a failed usage reset: create it again with its old
+    # password and port, so the link stays the same.
+    prev=""
+    if [ "${#backups[@]}" -gt 0 ]; then # newest backup first
+      prev=$(jq -c -s --arg n "$name" '[.[].accessKeys[] | select(.name == $n)][0] // empty' "${backups[@]}")
+    fi
+    if [ -n "$prev" ] && resp=$(create_key "$(jq -c --argjson l "$limit" '{name, password, port, method}
+      + (if $l == null then {} else {limit: $l} end)' <<<"$prev")"); then
+      echo "$name ($(gb "$(jq -r '.dataLimit.bytes // empty' <<<"$resp")"), restored, same link): $(jq -r .accessUrl <<<"$resp")"
+    elif [ -z "$prev" ] && resp=$(create_key "$(jq -c -n --arg n "$name" --argjson l "$limit" \
       '{name: $n} + (if $l == null then {} else {limit: $l} end)')"); then
       echo "$name ($(gb "$(jq -r '.dataLimit.bytes // empty' <<<"$resp")"), NEW link): $(jq -r .accessUrl <<<"$resp")"
     else
@@ -142,13 +157,24 @@ cmd_sync() {
       failed=1
     fi
   done < <(jq -c 'to_entries[]' <<<"$keys_json")
+  # The keys now match access_keys, so old backups must not bring back keys
+  # that were removed on purpose.
+  if [ "$failed" = 0 ]; then rm -f "$STATE_DIR"/before-reset-*.json; fi
   return "$failed"
 }
 
 cmd_reset_usage() {
-  init_api
   mkdir -p "$STATE_DIR"
   chmod 700 "$STATE_DIR"
+  # A new period at boot and a missed reset timer can both fire right after a
+  # boot; one reset is enough (and one disconnect).
+  local last
+  last=$(cat "$STATE_DIR/last-reset" 2>/dev/null || echo 0)
+  if [ $(($(date +%s) - last)) -lt 300 ]; then
+    echo "access-keys: usage was reset less than 5 minutes ago; skipping"
+    return 0
+  fi
+  init_api
   # Backup in case a key cannot be created again (contains the key passwords).
   local backup keys
   backup="$STATE_DIR/before-reset-$(date +%s).json"
@@ -167,21 +193,32 @@ cmd_reset_usage() {
     fi
     if resp=$(create_key "$body"); then
       echo "access-keys: usage reset to 0 for '$name' (key $id -> $(jq -r .id <<<"$resp"), same link)"
-    else
-      echo "access-keys: FAILED to recreate '$name' (key $id); stopping, other keys left as they are." >&2
-      echo "access-keys: run 'sudo outline-access-keys restore' to bring it back (same link)" >&2
+      continue
+    fi
+    echo "access-keys: FAILED to recreate '$name' (key $id); retrying from the backup" >&2
+    # Bring it back from the backup (same link, new ID so usage 0 too), then
+    # carry on with the other keys. If that fails, stop: at most one key missing.
+    local restored=false
+    for _ in 1 2 3; do
+      sleep "${RESTORE_WAIT:-10}"
+      if cmd_restore keep; then restored=true; break; fi
+    done
+    if [ "$restored" = false ]; then
+      echo "access-keys: '$name' still missing; other keys left as they are. Run 'sudo outline-access-keys restore' later (the next sync also restores it)." >&2
       failed=1
       break
     fi
   done < <(jq -c '.accessKeys[]' <<<"$keys")
 
   if [ "$failed" = 0 ]; then rm -f "$backup"; fi
+  date +%s >"$STATE_DIR/last-reset"
   return "$failed"
 }
 
+# restore [keep]: with "keep", the backup is not deleted afterwards.
 cmd_restore() {
   local backup
-  backup=$(ls -1t "$STATE_DIR"/before-reset-*.json 2>/dev/null | head -n1 || true)
+  backup=$(latest_backup)
   if [ -z "$backup" ]; then
     echo "access-keys: no backup found in $STATE_DIR (nothing to restore)"
     return 0
@@ -203,7 +240,7 @@ cmd_restore() {
   done < <(jq -c --argjson cur "$current" '
     ($cur.accessKeys | map(.password)) as $have
     | .accessKeys[] | select(.password as $p | $have | index($p) | not)' "$backup")
-  if [ "$failed" = 0 ]; then rm -f "$backup"; fi
+  if [ "$failed" = 0 ] && [ "${1:-}" != keep ]; then rm -f "$backup"; fi
   return "$failed"
 }
 

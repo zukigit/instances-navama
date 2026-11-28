@@ -79,6 +79,7 @@ The keys step runs when `access_keys` changes, or on a new VM. It runs the same 
 | On the server | Result |
 |---|---|
 | Name in `access_keys`, key exists | Same key and link; limit set from `access_keys`; usage unchanged |
+| Name in `access_keys`, no key, but it was lost in a failed usage reset | Created again from the backup: same link (`restored, same link`) |
 | Name in `access_keys`, no key | New key, printed as `NEW link` |
 | Key not in `access_keys`, including keys made in Manager, or a duplicate name | Deleted |
 
@@ -86,7 +87,9 @@ It prints every key's link. With `access_keys = {}` (the default), Terraform doe
 
 **How a usage reset works:** Outline counts usage per key ID and has no "reset" call. So each key is deleted and created again with the same name, password, port and limit. The link holds only the password, host and port, so it doesn't change, and the new ID starts at 0. Every key on the server is reset, including keys made in Manager, but with `access_keys` set those are deleted anyway.
 
-**If recreating a key fails** (Outline keeps refusing it), the reset stops right there, so at most one key is missing and the rest are left as they were. A backup with every key's password is kept in `/var/lib/outline-access-keys/`. Run `sudo outline-access-keys restore` on the VM to create the missing key again with the same link.
+**If recreating a key fails**, the reset tries to bring it back from its backup (same link) a few times, then carries on with the other keys. If it still can't, the reset stops there, so at most one key is missing and the rest are left as they were. The backup (with the key passwords) stays in `/var/lib/outline-access-keys/` until the key is back. The key comes back with the same link either when you run `sudo outline-access-keys restore` on the VM, or at the next keys sync (any `apply` that changes `access_keys`). After a successful sync the backups are deleted, so a key you removed from `access_keys` can't come back later.
+
+**One reset at a time is enough:** a reset within 5 minutes of the last one is skipped. A new period at boot and a missed reset timer can both fire right after a boot, and this gives users one disconnect instead of two.
 
 ## Boot
 
@@ -130,6 +133,7 @@ The timer step tells these apart by comparing the VM's boot time with the plan t
 - **A new VM** always starts a fresh period with fresh keys, whatever the mode.
 - **During a usage reset**, connected users drop for a moment, keys are briefly missing, Manager shows new key IDs, and Manager loses the earlier usage history.
 - **Outline counts usage over a rolling 30 days.** Without a reset, usage older than 30 days drops off on its own.
+- **`sudo shutdown -c` on the VM** cancels the shutdown but not the saved end. A VM that keeps running past its end gets no new period, and no usage reset, until the next `apply` that changes `run_hours` or uses `-replace`. A later boot then starts a new period, because the end has passed.
 - **Port 22:** each SSH step opens the `<firewall_name>-ssh` rule first, and `ssh_close` closes it at the end. If a step fails, the rule stays open until the next successful apply. If `default-allow-ssh` is enabled, it keeps port 22 open regardless.
 
 ## Checking the state on a VM
@@ -141,5 +145,5 @@ sudo cat /run/systemd/shutdown/scheduled             # pending shutdown (USEC = 
 systemctl list-timers 'outline-usage-reset-*'        # pending usage resets
 sudo journalctl -u google-startup-scripts -b         # boot script log (period, IP)
 sudo journalctl -u 'outline-usage-reset-*'           # usage reset log
-sudo outline-access-keys restore                     # after a failed usage reset
+sudo outline-access-keys restore                     # bring back a key lost in a failed usage reset
 ```
