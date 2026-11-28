@@ -192,3 +192,21 @@ variable "run_hours_mode" {
     error_message = "run_hours_mode must be \"reset\" or \"append\"."
   }
 }
+
+variable "access_keys" {
+  description = <<-EOT
+    Outline access keys to create, by name, with an optional data limit in GB
+    (omit or null for no limit). Empty (default) = Terraform does not touch keys.
+    run_hours_mode = "reset" deletes all keys and creates these; "append" keeps
+    them and resets their data usage to 0 at the old shutdown time.
+  EOT
+  type = map(object({
+    data_limit_gb = optional(number)
+  }))
+  default = {}
+
+  validation {
+    condition     = alltrue([for k in values(var.access_keys) : coalesce(k.data_limit_gb, 0) >= 0])
+    error_message = "data_limit_gb must be 0 or more."
+  }
+}

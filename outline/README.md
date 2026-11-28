@@ -86,6 +86,33 @@ A VM created in the same `apply` always uses `reset`, since its boot script has 
 
 The shutdown runs inside the VM, so someone logged in could cancel it with `sudo shutdown -c`. The VMs have `desired_status = "RUNNING"`, so after a VM is stopped, the next `terraform apply` starts it again with a fresh timer. Stopping keeps the disk, so Outline stays installed, but the VM gets a new external IP unless you reserve a static one, so existing access keys stop working.
 
+### Access keys (VPN keys)
+
+List the keys in `access_keys` and Terraform creates them through Outline's management API, with a data limit each, and prints the `ss://` links in the apply output. They are not saved anywhere on your machine.
+
+```hcl
+access_keys = {
+  alice = { data_limit_gb = 200 }
+  bob   = {}                      # no limit
+}
+```
+
+```
+terraform_data.access_keys["us-west1"] (remote-exec): ===== Outline access keys =====
+terraform_data.access_keys["us-west1"] (remote-exec): alice (200 GB): ss://...
+```
+
+What happens depends on `run_hours_mode`. The step runs when the VM is new, or when `run_hours`, `run_hours_mode` or `access_keys` changes:
+
+| Mode | Keys |
+|---|---|
+| `reset` (and every new VM) | Deletes **all** keys on the server, including ones made in Manager, then creates the ones in `access_keys` and prints them. Pending usage resets are cancelled. |
+| `append` | Keys stay as they are, and usage is unchanged for now. At the shutdown time that was scheduled before this apply (the old timer), every key's data usage goes back to 0, so a user with 50 GB left keeps 50 GB until then and gets the full limit after. |
+
+How the usage reset works: Outline has no "reset usage" call and counts usage per key ID. At the old timer time, a systemd timer on the VM (`outline-usage-reset-<time>.timer`) deletes each key and creates it again with the same name, password, port and data limit. The `ss://` link only holds the password, host and port, so **users keep the link they have**, and the new key ID starts at 0. Side effects: connected users drop for a moment, and Manager loses the usage history from before the reset. Each `append` adds its own reset, so appending twice before the first old time resets usage at both times. If the VM is off at that time, the reset runs at its next boot. To check pending resets on the VM: `systemctl list-timers 'outline-usage-reset-*'`.
+
+To get new keys with the same settings, force the step: `terraform apply -replace='terraform_data.access_keys["us-west1"]'` (in `reset` mode). With `access_keys` empty (default), Terraform does not touch the keys.
+
 ### After a restart (new IP)
 
 The external IP is ephemeral, so it changes every time a VM is stopped and started. A boot script (`startup.sh.tftpl`, set as the VM's `startup-script` metadata) handles Outline's side automatically at every boot:
@@ -163,6 +190,7 @@ gcloud compute firewall-rules update allow-outline-ssh --disabled      # close
 | `close_ssh_after_install` | `true` | Turn the SSH rule off after the install finishes |
 | `run_hours` | `0` (no limit) | Stop each VM after this many hours of running; `apply` starts it again |
 | `run_hours_mode` | `reset` | `reset`: stop `run_hours` from now; `append`: add `run_hours` to the time left |
+| `access_keys` | `{}` (keys not managed) | Outline keys to create, `name = { data_limit_gb = N }`; see [Access keys](#access-keys-vpn-keys) |
 | `ssh_source_ranges` | `["0.0.0.0/0"]` | Sources allowed to SSH in; narrow to your IP |
 | `outline_api_port` | `8443` | Outline management API port (TCP) |
 | `outline_keys_port` | `9443` | Outline access keys port (TCP and UDP) |

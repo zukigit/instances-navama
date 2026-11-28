@@ -32,3 +32,13 @@ firewall_name = "allow-outline"
 run_hours = 0
 # How a run_hours change applies to a running VM: "reset" (from now) or "append" (add to time left).
 # run_hours_mode = "reset"
+
+# Outline access keys (VPN keys), printed as ss:// links in the apply output.
+# data_limit_gb: limit per key (decimal GB, like Outline Manager); omit for no limit.
+# reset mode: deletes ALL keys and creates these. append mode: keeps the keys and
+# resets their data usage to 0 at the old shutdown time.
+# Leave empty to manage keys yourself in Outline Manager.
+# access_keys = {
+#   alice = { data_limit_gb = 200 }
+#   bob   = {}
+# }
